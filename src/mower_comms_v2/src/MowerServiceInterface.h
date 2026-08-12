@@ -14,11 +14,12 @@
 class MowerServiceInterface : public MowerServiceInterfaceBase {
  public:
   MowerServiceInterface(uint16_t service_id, const xbot::serviceif::Context& ctx,
-                        const ros::Publisher& status_publisher,
-                        const ros::Publisher& us_left_publisher,
+                        const ros::Publisher& status_publisher, const ros::Publisher& us_left_publisher,
                         const ros::Publisher& us_right_publisher)
-      : MowerServiceInterfaceBase(service_id, ctx), status_publisher_(status_publisher),
-        us_left_publisher_(us_left_publisher), us_right_publisher_(us_right_publisher) {
+      : MowerServiceInterfaceBase(service_id, ctx),
+        status_publisher_(status_publisher),
+        us_left_publisher_(us_left_publisher),
+        us_right_publisher_(us_right_publisher) {
   }
 
   void SetMowerSpeed(float speed);

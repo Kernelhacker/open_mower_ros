@@ -3,6 +3,7 @@
 //
 
 #include "MowerServiceInterface.h"
+
 #include <sensor_msgs/Range.h>
 
 void MowerServiceInterface::Tick() {
@@ -50,7 +51,7 @@ void MowerServiceInterface::OnUltrasonicLeftChanged(const float& new_value) {
   msg.header.stamp = ros::Time::now();
   msg.header.frame_id = "ultrasonic_left_link";
   msg.radiation_type = sensor_msgs::Range::ULTRASOUND;
-  msg.field_of_view = 0.523; // ~30 degrees
+  msg.field_of_view = 0.523;  // ~30 degrees
   msg.min_range = 0.1;
   msg.max_range = 2.0;
   msg.range = new_value;
@@ -62,7 +63,7 @@ void MowerServiceInterface::OnUltrasonicRightChanged(const float& new_value) {
   msg.header.stamp = ros::Time::now();
   msg.header.frame_id = "ultrasonic_right_link";
   msg.radiation_type = sensor_msgs::Range::ULTRASOUND;
-  msg.field_of_view = 0.523; // ~30 degrees
+  msg.field_of_view = 0.523;  // ~30 degrees
   msg.min_range = 0.1;
   msg.max_range = 2.0;
   msg.range = new_value;

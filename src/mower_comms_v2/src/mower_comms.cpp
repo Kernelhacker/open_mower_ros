@@ -192,7 +192,8 @@ int main(int argc, char** argv) {
   status_pub = n.advertise<mower_msgs::Status>("ll/mower_status", 1);
   us_left_pub = n.advertise<sensor_msgs::Range>("ll/ultrasonic/left", 1);
   us_right_pub = n.advertise<sensor_msgs::Range>("ll/ultrasonic/right", 1);
-  mower_service = std::make_unique<MowerServiceInterface>(xbot::service_ids::MOWER, ctx, status_pub, us_left_pub, us_right_pub);
+  mower_service =
+      std::make_unique<MowerServiceInterface>(xbot::service_ids::MOWER, ctx, status_pub, us_left_pub, us_right_pub);
   mower_service->Start();
 
   // IMU service
