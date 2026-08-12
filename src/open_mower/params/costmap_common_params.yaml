@@ -9,6 +9,8 @@ plugins:
   type: costmap_2d::StaticLayer
 - name: obstacle_layer
   type: costmap_2d::ObstacleLayer
+- name: range_sensor_layer
+  type: range_sensor_layer::RangeSensorLayer
 - name: inflation_layer
   type: costmap_2d::InflationLayer
 
@@ -18,3 +20,10 @@ obstacle_layer:
   max_obstacle_height: 1.0
   obstacle_range: 3.0
   raytrace_range: 4.0
+
+range_sensor_layer:
+  topics: ['/ll/ultrasonic/left', '/ll/ultrasonic/right']
+  no_readings_timeout: 1.0
+  clear_threshold: 0.2
+  mark_threshold: 0.8
+  clear_on_max_reading: true

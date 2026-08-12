@@ -3,6 +3,7 @@
 //
 
 #include "MowerServiceInterface.h"
+#include <sensor_msgs/Range.h>
 
 void MowerServiceInterface::Tick() {
   SendMowerSpeed(commanded_speed_);
@@ -42,6 +43,30 @@ void MowerServiceInterface::OnMowerMotorCurrentChanged(const float& new_value) {
 
 void MowerServiceInterface::OnMowerMotorRPMChanged(const float& new_value) {
   status_msg_.mower_motor_rpm = new_value;
+}
+
+void MowerServiceInterface::OnUltrasonicLeftChanged(const float& new_value) {
+  sensor_msgs::Range msg;
+  msg.header.stamp = ros::Time::now();
+  msg.header.frame_id = "ultrasonic_left_link";
+  msg.radiation_type = sensor_msgs::Range::ULTRASOUND;
+  msg.field_of_view = 0.523; // ~30 degrees
+  msg.min_range = 0.1;
+  msg.max_range = 2.0;
+  msg.range = new_value;
+  us_left_publisher_.publish(msg);
+}
+
+void MowerServiceInterface::OnUltrasonicRightChanged(const float& new_value) {
+  sensor_msgs::Range msg;
+  msg.header.stamp = ros::Time::now();
+  msg.header.frame_id = "ultrasonic_right_link";
+  msg.radiation_type = sensor_msgs::Range::ULTRASOUND;
+  msg.field_of_view = 0.523; // ~30 degrees
+  msg.min_range = 0.1;
+  msg.max_range = 2.0;
+  msg.range = new_value;
+  us_right_publisher_.publish(msg);
 }
 
 void MowerServiceInterface::OnServiceConnected(uint16_t service_id) {
