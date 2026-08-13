@@ -10,3 +10,7 @@
 [submodule "src/lib/ros_ntrip_client"]
 	path = src/lib/ros_ntrip_client
 	url = https://github.com/olliewalsh/ros_ntrip_client.git
+[submodule "src/lib/navigation_layers"]
+	path = src/lib/navigation_layers
+	url = https://github.com/DLu/navigation_layers.git
+	branch = noetic
