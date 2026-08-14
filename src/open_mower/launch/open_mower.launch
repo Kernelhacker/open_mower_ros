@@ -35,4 +35,8 @@
     <node pkg="mower_logic" type="monitoring" name="monitoring" output="screen" respawn="true" respawn_delay="10"/>
 
     <include file="$(find open_mower)/launch/include/_params.launch"/>
+
+    <!-- Static transform publishers for the Amiro ultrasonic sensors -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="ultrasonic_left_publisher" args="0.3 0.15 0.1 0.5 0 0 base_link ultrasonic_left_link" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="ultrasonic_right_publisher" args="0.3 -0.15 0.1 -0.5 0 0 base_link ultrasonic_right_link" />
 </launch>
