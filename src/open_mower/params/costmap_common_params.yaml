@@ -9,8 +9,6 @@ plugins:
   type: costmap_2d::StaticLayer
 - name: obstacle_layer
   type: costmap_2d::ObstacleLayer
-- name: range_sensor_layer
-  type: range_sensor_layer::RangeSensorLayer
 - name: inflation_layer
   type: costmap_2d::InflationLayer
 

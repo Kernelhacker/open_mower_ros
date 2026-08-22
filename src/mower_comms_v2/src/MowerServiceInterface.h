@@ -48,6 +48,10 @@ class MowerServiceInterface : public MowerServiceInterfaceBase {
   const ros::Publisher& us_left_publisher_;
   const ros::Publisher& us_right_publisher_;
   float commanded_speed_ = 0.0f;  // commanded normalized speed in [-1, 1]; re-sent every tick
+  bool has_us_left_ = false;
+  float us_left_range_ = 0.0f;
+  bool has_us_right_ = false;
+  float us_right_range_ = 0.0f;
 };
 
 #endif  // MOWERSERVICEINTERFACE_H
