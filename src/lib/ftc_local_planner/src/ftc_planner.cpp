@@ -191,7 +191,6 @@ namespace ftc_local_planner
         {
             cmd_vel.twist.linear.x = 0;
             cmd_vel.twist.angular.z = 0;
-            is_crashed = true;
             return RET_BLOCKED;
         }
 
@@ -598,52 +597,50 @@ namespace ftc_local_planner
 
     bool FTCPlanner::checkCollision(int max_points)
     {
+        if (!config.check_obstacles)
+        {
+            return false;
+        }
+
         unsigned int x;
         unsigned int y;
 
         std::vector<geometry_msgs::Point> footprint;
         visualization_msgs::Marker obstacle_marker;
 
-        if (!config.check_obstacles)
-        {
-            return false;
-        }
-        // maximal costs
-        unsigned char previous_cost = 255;
-        // ensure look ahead not out of plan
-        if (global_plan.size() < max_points)
-        {
-            max_points = global_plan.size();
-        }
-
         // calculate cost of footprint at robots actual pose
         if (config.obstacle_footprint)
         {
-        costmap->getOrientedFootprint(footprint);
-        for (int i = 0; i < footprint.size(); i++)
-        {
-            // check cost of each point of footprint
-            if (costmap_map_->worldToMap(footprint[i].x, footprint[i].y, x, y))
+            costmap->getOrientedFootprint(footprint);
+            for (size_t i = 0; i < footprint.size(); i++)
             {
-                unsigned char costs = costmap_map_->getCost(x, y);
-                if (costs >= costmap_2d::LETHAL_OBSTACLE)
+                // check cost of each point of footprint
+                if (costmap_map_->worldToMap(footprint[i].x, footprint[i].y, x, y))
                 {
-                    ROS_WARN("FTCLocalPlannerROS: Possible collision of footprint at actual pose. Stop local planner.");
-                    return true;
+                    unsigned char costs = costmap_map_->getCost(x, y);
+                    if (costs == costmap_2d::LETHAL_OBSTACLE || costs == costmap_2d::INSCRIBED_INFLATED_OBSTACLE)
+                    {
+                        ROS_WARN_THROTTLE(2.0, "FTCLocalPlannerROS: Possible collision of footprint at actual pose (%d). Stop local planner.", costs);
+                        return true;
+                    }
                 }
             }
         }
+
+        if (global_plan.empty())
+        {
+            return false;
         }
 
+        size_t plan_size = global_plan.size();
         for (int i = 0; i < max_points; i++)
         {
-            geometry_msgs::PoseStamped x_pose;
-            int index = current_index + i;
-            if (index > global_plan.size())
+            size_t index = current_index + i;
+            if (index >= plan_size)
             {
-                index = global_plan.size();
+                break;
             }
-            x_pose = global_plan[index];
+            const geometry_msgs::PoseStamped &x_pose = global_plan[index];
 
             if (costmap_map_->worldToMap(x_pose.pose.position.x, x_pose.pose.position.y, x, y))
             {
@@ -652,17 +649,12 @@ namespace ftc_local_planner
                 {
                     debugObstacle(obstacle_marker, x, y, costs, max_points);
                 }
-                // Near at obstacel
-                if (costs > 0)
+                // Only trigger on actual lethal or inscribed obstacles (ignore NO_INFORMATION 255)
+                if (costs == costmap_2d::LETHAL_OBSTACLE || costs == costmap_2d::INSCRIBED_INFLATED_OBSTACLE)
                 {
-                    // Possible collision
-                    if (costs > 127 && costs > previous_cost)
-                    {
-                        ROS_WARN("FTCLocalPlannerROS: Possible collision. Stop local planner.");
-                        return true;
-                    }
+                    ROS_WARN_THROTTLE(2.0, "FTCLocalPlannerROS: Possible collision on path at index %zu (cost %d). Stop local planner.", index, costs);
+                    return true;
                 }
-                previous_cost = costs;
             }
         }
         return false;

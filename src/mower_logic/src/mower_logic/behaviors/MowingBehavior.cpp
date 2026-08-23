@@ -550,6 +550,7 @@ bool MowingBehavior::execute_mowing_plan() {
       exePathGoal.path = exePath;
       exePathGoal.angle_tolerance = 5.0 * (M_PI / 180.0);
       exePathGoal.dist_tolerance = 0.2;
+      exePathGoal.patience = 5.0;
       exePathGoal.tolerance_from_action = true;
       exePathGoal.controller = "FTCPlanner";
 
