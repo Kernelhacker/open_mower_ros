@@ -618,7 +618,7 @@ namespace ftc_local_planner
                 if (costmap_map_->worldToMap(footprint[i].x, footprint[i].y, x, y))
                 {
                     unsigned char costs = costmap_map_->getCost(x, y);
-                    if (costs == costmap_2d::LETHAL_OBSTACLE || costs == costmap_2d::INSCRIBED_INFLATED_OBSTACLE)
+                    if (costs > 0 && costs != costmap_2d::NO_INFORMATION)
                     {
                         ROS_WARN_THROTTLE(2.0, "FTCLocalPlannerROS: Possible collision of footprint at actual pose (%d). Stop local planner.", costs);
                         return true;
@@ -649,8 +649,8 @@ namespace ftc_local_planner
                 {
                     debugObstacle(obstacle_marker, x, y, costs, max_points);
                 }
-                // Only trigger on actual lethal or inscribed obstacles (ignore NO_INFORMATION 255)
-                if (costs == costmap_2d::LETHAL_OBSTACLE || costs == costmap_2d::INSCRIBED_INFLATED_OBSTACLE)
+                // Trigger on actual or inflated obstacle cost (ignore NO_INFORMATION 255)
+                if (costs > 0 && costs != costmap_2d::NO_INFORMATION)
                 {
                     ROS_WARN_THROTTLE(2.0, "FTCLocalPlannerROS: Possible collision on path at index %zu (cost %d). Stop local planner.", index, costs);
                     return true;
