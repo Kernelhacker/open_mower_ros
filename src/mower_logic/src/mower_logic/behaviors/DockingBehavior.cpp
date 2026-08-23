@@ -89,7 +89,6 @@ bool DockingBehavior::approach_docking_point() {
     exePathGoal.path = path;
     exePathGoal.angle_tolerance = 1.0 * (M_PI / 180.0);
     exePathGoal.dist_tolerance = 0.1;
-    exePathGoal.patience = 5.0;
     exePathGoal.tolerance_from_action = true;
     exePathGoal.controller = "FTCPlanner";
     ROS_INFO_STREAM("Executing Docking Approach");
@@ -125,7 +124,6 @@ bool DockingBehavior::dock_straight() {
   exePathGoal.path = path;
   exePathGoal.angle_tolerance = 1.0 * (M_PI / 180.0);
   exePathGoal.dist_tolerance = 0.1;
-  exePathGoal.patience = 5.0;
   exePathGoal.tolerance_from_action = true;
   exePathGoal.controller = "DockingFTCPlanner";
 
