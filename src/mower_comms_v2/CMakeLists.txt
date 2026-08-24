@@ -10,8 +10,11 @@ add_compile_options(-std=c++17)
 find_package(catkin REQUIRED COMPONENTS
         mower_msgs
         sensor_msgs
+        geometry_msgs
         roscpp
         std_msgs
+        tf2
+        tf2_ros
         xesc_msgs
         xbot_msgs
         robot_localization

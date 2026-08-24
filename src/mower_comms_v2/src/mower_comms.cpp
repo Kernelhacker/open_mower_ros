@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License along with OpenMower. If not, see
 // <https://www.gnu.org/licenses/>.
 //
+#include <geometry_msgs/TransformStamped.h>
 #include <geometry_msgs/TwistStamped.h>
 #include <mower_msgs/ESCStatus.h>
 #include <mower_msgs/Emergency.h>
@@ -27,6 +28,8 @@
 #include <spdlog/sinks/callback_sink.h>
 #include <spdlog/spdlog.h>
 #include <std_msgs/String.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2_ros/static_transform_broadcaster.h>
 
 #include "../../../services/service_ids.h"
 #include "BmsServiceInterface.h"
@@ -195,6 +198,60 @@ int main(int argc, char** argv) {
   mower_service =
       std::make_unique<MowerServiceInterface>(xbot::service_ids::MOWER, ctx, status_pub, us_left_pub, us_right_pub);
   mower_service->Start();
+
+  // Static transforms for ultrasonic sensors (configurable via custom_params.yaml)
+  static tf2_ros::StaticTransformBroadcaster static_broadcaster;
+  std::vector<geometry_msgs::TransformStamped> static_transforms;
+
+  double us_left_x = 0.3, us_left_y = 0.15, us_left_z = 0.1;
+  double us_left_yaw = 0.5, us_left_pitch = 0.0, us_left_roll = 0.0;
+  paramNh.getParam("ultrasonic/left/x", us_left_x);
+  paramNh.getParam("ultrasonic/left/y", us_left_y);
+  paramNh.getParam("ultrasonic/left/z", us_left_z);
+  paramNh.getParam("ultrasonic/left/yaw", us_left_yaw);
+  paramNh.getParam("ultrasonic/left/pitch", us_left_pitch);
+  paramNh.getParam("ultrasonic/left/roll", us_left_roll);
+
+  geometry_msgs::TransformStamped tf_left;
+  tf_left.header.stamp = ros::Time::now();
+  tf_left.header.frame_id = "base_link";
+  tf_left.child_frame_id = "ultrasonic_left_link";
+  tf_left.transform.translation.x = us_left_x;
+  tf_left.transform.translation.y = us_left_y;
+  tf_left.transform.translation.z = us_left_z;
+  tf2::Quaternion q_left;
+  q_left.setRPY(us_left_roll, us_left_pitch, us_left_yaw);
+  tf_left.transform.rotation.x = q_left.x();
+  tf_left.transform.rotation.y = q_left.y();
+  tf_left.transform.rotation.z = q_left.z();
+  tf_left.transform.rotation.w = q_left.w();
+  static_transforms.push_back(tf_left);
+
+  double us_right_x = 0.3, us_right_y = -0.15, us_right_z = 0.1;
+  double us_right_yaw = -0.5, us_right_pitch = 0.0, us_right_roll = 0.0;
+  paramNh.getParam("ultrasonic/right/x", us_right_x);
+  paramNh.getParam("ultrasonic/right/y", us_right_y);
+  paramNh.getParam("ultrasonic/right/z", us_right_z);
+  paramNh.getParam("ultrasonic/right/yaw", us_right_yaw);
+  paramNh.getParam("ultrasonic/right/pitch", us_right_pitch);
+  paramNh.getParam("ultrasonic/right/roll", us_right_roll);
+
+  geometry_msgs::TransformStamped tf_right;
+  tf_right.header.stamp = ros::Time::now();
+  tf_right.header.frame_id = "base_link";
+  tf_right.child_frame_id = "ultrasonic_right_link";
+  tf_right.transform.translation.x = us_right_x;
+  tf_right.transform.translation.y = us_right_y;
+  tf_right.transform.translation.z = us_right_z;
+  tf2::Quaternion q_right;
+  q_right.setRPY(us_right_roll, us_right_pitch, us_right_yaw);
+  tf_right.transform.rotation.x = q_right.x();
+  tf_right.transform.rotation.y = q_right.y();
+  tf_right.transform.rotation.z = q_right.z();
+  tf_right.transform.rotation.w = q_right.w();
+  static_transforms.push_back(tf_right);
+
+  static_broadcaster.sendTransform(static_transforms);
 
   // IMU service
   std::string imu_axis_config;
