@@ -506,11 +506,11 @@ bool MowingBehavior::execute_mowing_plan() {
             first_point_trim_counter++;
             first_point_attempt_counter = 0;  // give it another <config.max_first_point_attempts> attempts
           } else {
-            // Unable to reach the start of this mow path after multiple trim attempts (obstacle blocking the start point).
-            // Skip this entire mow line and proceed to the next one!
-            ROS_WARN_STREAM(
-                "MowingBehavior: (FIRST POINT) Max retries reached for path "
-                << currentMowingPath << " in area " << currentMowingArea << " - skipping to next mow path.");
+            // Unable to reach the start of this mow path after multiple trim attempts (obstacle blocking the start
+            // point). Skip this entire mow line and proceed to the next one!
+            ROS_WARN_STREAM("MowingBehavior: (FIRST POINT) Max retries reached for path "
+                            << currentMowingPath << " in area " << currentMowingArea
+                            << " - skipping to next mow path.");
             currentMowingPath++;
             currentMowingPathIndex = 0;
             first_point_attempt_counter = 0;
