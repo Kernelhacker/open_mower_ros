@@ -505,16 +505,16 @@ bool MowingBehavior::execute_mowing_plan() {
             currentMowingPathIndex++;
             first_point_trim_counter++;
             first_point_attempt_counter = 0;  // give it another <config.max_first_point_attempts> attempts
-            paused = true;
-            update_actions();
           } else {
-            // Unable to reach the start of the mow path (we tried multiple attempts for the same point, and we skipped
-            // points which also didnt work, time to give up)
-            ROS_ERROR_STREAM(
-                "MowingBehavior: (FIRST POINT) Max retries reached, we are unable to reach any of the first points - "
-                "aborting at index: "
-                << currentMowingPathIndex << " path: " << currentMowingPath << " area: " << currentMowingArea);
-            this->abort();
+            // Unable to reach the start of this mow path after multiple trim attempts (obstacle blocking the start point).
+            // Skip this entire mow line and proceed to the next one!
+            ROS_WARN_STREAM(
+                "MowingBehavior: (FIRST POINT) Max retries reached for path "
+                << currentMowingPath << " in area " << currentMowingArea << " - skipping to next mow path.");
+            currentMowingPath++;
+            currentMowingPathIndex = 0;
+            first_point_attempt_counter = 0;
+            first_point_trim_counter = 0;
           }
         }
         continue;

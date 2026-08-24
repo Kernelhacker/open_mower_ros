@@ -618,7 +618,7 @@ namespace ftc_local_planner
                 if (costmap_map_->worldToMap(footprint[i].x, footprint[i].y, x, y))
                 {
                     unsigned char costs = costmap_map_->getCost(x, y);
-                    if (costs > 0 && costs != costmap_2d::NO_INFORMATION)
+                    if (costs == costmap_2d::LETHAL_OBSTACLE || costs == costmap_2d::INSCRIBED_INFLATED_OBSTACLE)
                     {
                         ROS_WARN_THROTTLE(2.0, "FTCLocalPlannerROS: Possible collision of footprint at actual pose (%d). Stop local planner.", costs);
                         return true;
