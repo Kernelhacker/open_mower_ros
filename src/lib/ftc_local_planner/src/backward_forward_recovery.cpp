@@ -144,7 +144,7 @@ bool BackwardForwardRecovery::isPathClear(const geometry_msgs::Pose& pose, bool 
     }
 
     unsigned char cost = costmap->getCost(mx, my);
-    if (cost > max_cost_threshold_)
+    if (cost > max_cost_threshold_ && cost != costmap_2d::NO_INFORMATION)
     {
       return false;
     }
