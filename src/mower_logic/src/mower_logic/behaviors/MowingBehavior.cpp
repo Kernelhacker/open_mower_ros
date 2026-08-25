@@ -21,9 +21,12 @@
 #include <nav_msgs/Path.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
+#include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
 #include <EmergencyServiceInterfaceBase.hpp>
 #include <cmath>
+#include <limits>
 
 #include "../StateSubscriber.h"
 #include "mower_logic/CheckPoint.h"
@@ -31,12 +34,15 @@
 #include "mower_map/GetMowingAreaSrv.h"
 #include "mower_map/SetNavPointSrv.h"
 #include "mower_msgs/Status.h"
+#include "xbot_msgs/AbsolutePose.h"
 
 extern ros::ServiceClient mapClient;
 extern ros::ServiceClient pathClient;
 extern ros::ServiceClient pathProgressClient;
 extern ros::ServiceClient setNavPointClient;
 extern ros::ServiceClient clearNavPointClient;
+
+extern xbot_msgs::AbsolutePose getPose();
 
 extern actionlib::SimpleActionClient<mbf_msgs::MoveBaseAction>* mbfClient;
 extern actionlib::SimpleActionClient<mbf_msgs::ExePathAction>* mbfClientExePath;
@@ -124,6 +130,7 @@ void MowingBehavior::reset() {
   publishMowerEvent("JOB_COMPLETE");
   current_job_finished = true;
   currentMowingPaths.clear();
+  temporary_obstacles.clear();
   currentMowingArea = 0;
   currentMowingPath = 0;
   currentMowingPathIndex = 0;
@@ -226,6 +233,9 @@ bool MowingBehavior::create_mowing_plan(int area_index) {
       overrideOrGlobal(area.outline_overlap_count, config.outline_overlap_count, -1);
   pathSrv.request.outline = area.area;
   pathSrv.request.holes = area.obstacles;
+  for (const auto& temp_obs : temporary_obstacles) {
+    pathSrv.request.holes.push_back(temp_obs);
+  }
   pathSrv.request.fill_type = slic3r_coverage_planner::PlanPathRequest::FILL_LINEAR;
   pathSrv.request.outer_offset = std::isnan(area.outline_offset) ? config.outline_offset : area.outline_offset;
   pathSrv.request.distance = config.tool_width;
@@ -265,6 +275,99 @@ bool MowingBehavior::create_mowing_plan(int area_index) {
     currentMowingPathIndex = 0;
   }
 
+  return true;
+}
+
+bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
+  auto config = getConfig();
+  if (!config.dynamic_obstacle_avoidance) {
+    return false;
+  }
+
+  ROS_WARN_STREAM("MowingBehavior: Dynamic Obstacle Avoidance - Obstacle detected on path "
+                  << currentMowingPath << " at index " << currentMowingPathIndex << ". Starting grace period of "
+                  << config.obstacle_grace_time << "s.");
+
+  // 1. Audio and Event notification
+  publishMowerEvent("OBSTACLE_DETECTED", json{{"mowing_path", currentMowingPath},
+                                              {"path_index", currentMowingPathIndex},
+                                              {"grace_time", config.obstacle_grace_time}});
+  broadcastAudioMessage(config.obstacle_audio_message);
+
+  // 2. Grace Time Wait
+  ros::Time grace_start = ros::Time::now();
+  ros::Rate check_rate(2);
+
+  while (ros::ok() && (ros::Time::now() - grace_start).toSec() < config.obstacle_grace_time) {
+    if (aborted || requested_pause_flag || skip_area || skip_path) {
+      return false;
+    }
+    check_rate.sleep();
+  }
+
+  // 3. Grace time expired. Recalculate plan with temporary exclusion zone.
+  broadcastAudioMessage("Rerouting around obstacle.");
+  publishMowerEvent("OBSTACLE_REROUTING");
+
+  // Get current robot pose
+  auto pose_msg = getPose();
+  double rx = pose_msg.pose.pose.position.x;
+  double ry = pose_msg.pose.pose.position.y;
+  tf2::Quaternion q;
+  tf2::fromMsg(pose_msg.pose.pose.orientation, q);
+  double roll, pitch, yaw;
+  tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+
+  // Obstacle coordinate estimated ahead of robot
+  double obs_x = rx + lookahead_dist * cos(yaw);
+  double obs_y = ry + lookahead_dist * sin(yaw);
+
+  // Create temporary exclusion polygon
+  double r = config.obstacle_exclusion_radius;
+  geometry_msgs::Polygon obs_poly;
+  geometry_msgs::Point32 p;
+  p.x = obs_x - r;
+  p.y = obs_y - r;
+  obs_poly.points.push_back(p);
+  p.x = obs_x + r;
+  p.y = obs_y - r;
+  obs_poly.points.push_back(p);
+  p.x = obs_x + r;
+  p.y = obs_y + r;
+  obs_poly.points.push_back(p);
+  p.x = obs_x - r;
+  p.y = obs_y + r;
+  obs_poly.points.push_back(p);
+  temporary_obstacles.push_back(obs_poly);
+
+  ROS_WARN_STREAM("MowingBehavior: Added temporary no-mow zone at (" << obs_x << ", " << obs_y << ") with radius " << r
+                                                                     << "m. Recalculating coverage plan with Slic3r.");
+
+  int old_path_idx = currentMowingPath;
+  if (!create_mowing_plan(currentMowingArea)) {
+    ROS_ERROR("MowingBehavior: Failed to recalculate mowing plan with obstacle!");
+    return false;
+  }
+
+  // Find the closest remaining path from the robot's current position among infill paths
+  int best_path_idx = 0;
+  double min_dist_sq = std::numeric_limits<double>::max();
+
+  size_t start_search = (old_path_idx >= config.outline_count) ? config.outline_count : 0;
+  for (size_t i = start_search; i < currentMowingPaths.size(); i++) {
+    if (currentMowingPaths[i].path.poses.empty()) continue;
+    const auto& first_pose = currentMowingPaths[i].path.poses.front().pose.position;
+    double d_sq = (first_pose.x - rx) * (first_pose.x - rx) + (first_pose.y - ry) * (first_pose.y - ry);
+    if (d_sq < min_dist_sq) {
+      min_dist_sq = d_sq;
+      best_path_idx = i;
+    }
+  }
+
+  currentMowingPath = best_path_idx;
+  currentMowingPathIndex = 0;
+  ROS_INFO_STREAM("MowingBehavior: Resuming mowing from new path index " << currentMowingPath << " of "
+                                                                         << currentMowingPaths.size());
   return true;
 }
 
@@ -486,6 +589,11 @@ bool MowingBehavior::execute_mowing_plan() {
         // we cannot reach the start point
         ROS_ERROR_STREAM("MowingBehavior: (FIRST POINT) - Could not reach goal (first point). Planner Status was: "
                          << current_status.state_);
+        if (handle_obstacle_and_replan(0.5)) {
+          first_point_attempt_counter = 0;
+          first_point_trim_counter = 0;
+          continue;
+        }
         // we have 3 attempts to get to the start pose of the mowing area
         if (first_point_attempt_counter < config.max_first_point_attempts) {
           ROS_WARN_STREAM("MowingBehavior: (FIRST POINT) - Attempt " << first_point_attempt_counter << " / "
@@ -636,6 +744,9 @@ bool MowingBehavior::execute_mowing_plan() {
           // currentMowingPathIndex might be 0 if we never consumed one of the points, we advance at least 1 point
           if (currentMowingPathIndex == 0) currentMowingPathIndex++;
           if (!requested_pause_flag) {
+            if (handle_obstacle_and_replan(0.5)) {
+              continue;
+            }
             // Path following failed (not a user-requested pause/abort). ExePath, unlike the
             // MoveBase action, never invokes MBF recovery on its own, so trigger it explicitly
             // here. Mirror MBF's move_base behavior: run each configured recovery behavior in

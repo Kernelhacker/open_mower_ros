@@ -86,7 +86,7 @@ actionlib::SimpleActionClient<mbf_msgs::MoveBaseAction>* mbfClient;
 actionlib::SimpleActionClient<mbf_msgs::ExePathAction>* mbfClientExePath;
 actionlib::SimpleActionClient<mbf_msgs::RecoveryAction>* mbfClientRecovery;
 
-ros::Publisher cmd_vel_pub, high_level_state_publisher, mqtt_publish_pub;
+ros::Publisher cmd_vel_pub, high_level_state_publisher, mqtt_publish_pub, audio_tts_pub;
 mower_logic::MowerLogicConfig last_config;
 ll::PowerConfig last_power_config;
 
@@ -248,6 +248,14 @@ void publishMowerEvent(const std::string& type, json details) {
   if (!current_job_id.empty()) details["job_id"] = current_job_id;
   if (!current_session_id.empty()) details["session_id"] = current_session_id;
   xbot_mqtt::publishEvent(mqtt_publish_pub, type, details);
+}
+
+void broadcastAudioMessage(const std::string& message) {
+  if (message.empty()) return;
+  std_msgs::String msg;
+  msg.data = message;
+  audio_tts_pub.publish(msg);
+  ROS_INFO_STREAM("om_mower_logic: Audio broadcast: \"" << message << "\"");
 }
 
 /// @brief If the BLADE Motor is not in the requested status (enabled),we call the
@@ -738,6 +746,7 @@ int main(int argc, char** argv) {
 
   high_level_state_publisher = n->advertise<mower_msgs::HighLevelStatus>("mower_logic/current_state", 100, true);
   mqtt_publish_pub = n->advertise<xbot_mqtt::MqttPublish>("/xbot_monitoring/mqtt_publish", 10);
+  audio_tts_pub = n->advertise<std_msgs::String>("/audio/tts", 10);
 
   pathClient = n->serviceClient<slic3r_coverage_planner::PlanPath>("slic3r_coverage_planner/plan_path");
   mapClient = n->serviceClient<mower_map::GetMowingAreaSrv>("mower_map_service/get_mowing_area");
