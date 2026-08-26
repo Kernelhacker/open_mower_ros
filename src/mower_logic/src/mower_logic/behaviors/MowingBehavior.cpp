@@ -128,6 +128,7 @@ void MowingBehavior::exit() {
 
 void MowingBehavior::reset() {
   publishMowerEvent("JOB_COMPLETE");
+  publishMowerEvent("TEMPORARY_OBSTACLES_CLEARED", json{{"obstacles", json::array()}});
   current_job_finished = true;
   currentMowingPaths.clear();
   temporary_obstacles.clear();
@@ -339,6 +340,26 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
   p.y = obs_y + r;
   obs_poly.points.push_back(p);
   temporary_obstacles.push_back(obs_poly);
+
+  json obs_poly_json = json::array();
+  for (const auto& pt : obs_poly.points) {
+    obs_poly_json.push_back(json{{"x", pt.x}, {"y", pt.y}});
+  }
+
+  json all_obstacles_json = json::array();
+  for (const auto& poly : temporary_obstacles) {
+    json poly_pts = json::array();
+    for (const auto& pt : poly.points) {
+      poly_pts.push_back(json{{"x", pt.x}, {"y", pt.y}});
+    }
+    all_obstacles_json.push_back(json{{"x", obs_x}, {"y", obs_y}, {"radius", r}, {"polygon", poly_pts}});
+  }
+
+  publishMowerEvent("OBSTACLE_ADDED", json{{"obstacle_x", obs_x},
+                                           {"obstacle_y", obs_y},
+                                           {"radius", r},
+                                           {"polygon", obs_poly_json},
+                                           {"obstacles", all_obstacles_json}});
 
   ROS_WARN_STREAM("MowingBehavior: Added temporary no-mow zone at (" << obs_x << ", " << obs_y << ") with radius " << r
                                                                      << "m. Recalculating coverage plan with Slic3r.");
