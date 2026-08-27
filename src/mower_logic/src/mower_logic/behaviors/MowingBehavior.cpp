@@ -22,6 +22,7 @@
 #include <nav_msgs/Path.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
+#include <sensor_msgs/Range.h>
 #include <std_msgs/Empty.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
@@ -45,6 +46,8 @@ extern ros::ServiceClient setNavPointClient;
 extern ros::ServiceClient clearNavPointClient;
 extern ros::Publisher add_dynamic_obstacle_pub;
 extern ros::Publisher clear_dynamic_obstacles_pub;
+extern StateSubscriber<sensor_msgs::Range> us_left_state_subscriber;
+extern StateSubscriber<sensor_msgs::Range> us_right_state_subscriber;
 
 extern xbot_msgs::AbsolutePose getPose();
 
@@ -324,26 +327,86 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
   double roll, pitch, yaw;
   tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
 
-  // Obstacle coordinate estimated ahead of robot
-  double obs_x = rx + lookahead_dist * cos(yaw);
-  double obs_y = ry + lookahead_dist * sin(yaw);
+  // 1. Read ultrasonic sensors to estimate obstacle distance and lateral offset
+  const double US_X_OFFSET = 0.30;  // Sensors mounted ~30cm in front of base_link
+  const double US_Y_OFFSET = 0.15;  // Left at +15cm, right at -15cm
 
-  // Create temporary exclusion polygon
+  double d_front = lookahead_dist;  // Fallback distance ahead of sensor
+  double y_local = 0.0;             // Lateral offset in robot frame (0 = centered)
+  bool left_detected = false;
+  bool right_detected = false;
+  double left_range = 2.0;
+  double right_range = 2.0;
+  ros::Time now = ros::Time::now();
+
+  if (us_left_state_subscriber.hasMessage()) {
+    auto msg = us_left_state_subscriber.getMessage();
+    double age = (now - us_left_state_subscriber.getMessageTime()).toSec();
+    if (age < 2.0 && msg.range >= msg.min_range && msg.range < 1.2 && !std::isnan(msg.range) &&
+        !std::isinf(msg.range)) {
+      left_range = msg.range;
+      left_detected = true;
+    }
+  }
+
+  if (us_right_state_subscriber.hasMessage()) {
+    auto msg = us_right_state_subscriber.getMessage();
+    double age = (now - us_right_state_subscriber.getMessageTime()).toSec();
+    if (age < 2.0 && msg.range >= msg.min_range && msg.range < 1.2 && !std::isnan(msg.range) &&
+        !std::isinf(msg.range)) {
+      right_range = msg.range;
+      right_detected = true;
+    }
+  }
+
+  if (left_detected && right_detected) {
+    d_front = std::min(left_range, right_range);
+    double diff = right_range - left_range;  // Positive if left is closer
+    y_local = std::max(-US_Y_OFFSET, std::min(US_Y_OFFSET, diff * 0.5));
+    ROS_INFO_STREAM("MowingBehavior: Both US sensors detected obstacle (left: "
+                    << left_range << "m, right: " << right_range << "m) -> d_front=" << d_front
+                    << "m, y_offset=" << y_local << "m");
+  } else if (left_detected) {
+    d_front = left_range;
+    y_local = US_Y_OFFSET;
+    ROS_INFO_STREAM("MowingBehavior: Left US sensor detected obstacle (range: "
+                    << left_range << "m) -> d_front=" << d_front << "m, y_offset=" << y_local << "m");
+  } else if (right_detected) {
+    d_front = right_range;
+    y_local = -US_Y_OFFSET;
+    ROS_INFO_STREAM("MowingBehavior: Right US sensor detected obstacle (range: "
+                    << right_range << "m) -> d_front=" << d_front << "m, y_offset=" << y_local << "m");
+  } else {
+    d_front = 0.20;  // Fallback: 20cm ahead of sensor if stopped by motor/controller
+    y_local = 0.0;
+    ROS_INFO_STREAM("MowingBehavior: No active US reading, using fallback d_front=" << d_front << "m");
+  }
+
+  // Distance from robot center (base_link) to the beginning (front edge) of the obstacle
+  double x_front_edge = US_X_OFFSET + d_front;
   double r = config.obstacle_exclusion_radius;
+
+  // The beginning of the obstacle box is ALWAYS fixed at x_front_edge (the detected surface),
+  // completely independent of the box size (r)!
+  // The box extends forward from x_front_edge to (x_front_edge + 2 * r), and laterally y_local +/- r.
+  // Center of the box in robot coordinates: (x_front_edge + r, y_local)
+  double obs_x = rx + (x_front_edge + r) * cos(yaw) - y_local * sin(yaw);
+  double obs_y = ry + (x_front_edge + r) * sin(yaw) + y_local * cos(yaw);
+
+  auto localToMap = [&](double lx, double ly) {
+    geometry_msgs::Point32 pt;
+    pt.x = rx + lx * cos(yaw) - ly * sin(yaw);
+    pt.y = ry + lx * sin(yaw) + ly * cos(yaw);
+    return pt;
+  };
+
+  // Create oriented rectangle polygon:
+  // Front edge is at x_front_edge, rear edge is at x_front_edge + 2 * r
   geometry_msgs::Polygon obs_poly;
-  geometry_msgs::Point32 p;
-  p.x = obs_x - r;
-  p.y = obs_y - r;
-  obs_poly.points.push_back(p);
-  p.x = obs_x + r;
-  p.y = obs_y - r;
-  obs_poly.points.push_back(p);
-  p.x = obs_x + r;
-  p.y = obs_y + r;
-  obs_poly.points.push_back(p);
-  p.x = obs_x - r;
-  p.y = obs_y + r;
-  obs_poly.points.push_back(p);
+  obs_poly.points.push_back(localToMap(x_front_edge, y_local - r));            // Front-Right
+  obs_poly.points.push_back(localToMap(x_front_edge + 2.0 * r, y_local - r));  // Back-Right
+  obs_poly.points.push_back(localToMap(x_front_edge + 2.0 * r, y_local + r));  // Back-Left
+  obs_poly.points.push_back(localToMap(x_front_edge, y_local + r));            // Front-Left
   temporary_obstacles.push_back(obs_poly);
 
   json obs_poly_json = json::array();
@@ -382,7 +445,6 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
   // Future paths remain untouched until the robot reaches them, preventing lines from being erroneously skipped.
   if (currentMowingPath >= 0 && currentMowingPath < static_cast<int>(currentMowingPaths.size())) {
     auto& cur_path = currentMowingPaths[currentMowingPath];
-    double r_sq = (r + 0.25) * (r + 0.25);  // 25cm buffer past obstacle edge
 
     // Scan current path from currentMowingPathIndex to find the blocked segment
     int block_start = -1;
@@ -390,14 +452,22 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
 
     for (size_t i = currentMowingPathIndex; i < cur_path.path.poses.size(); i++) {
       const auto& pt = cur_path.path.poses[i].pose.position;
-      double d_sq = (pt.x - obs_x) * (pt.x - obs_x) + (pt.y - obs_y) * (pt.y - obs_y);
-      if (d_sq <= r_sq) {
+      // Project pose into robot local coordinate frame
+      double dx = pt.x - rx;
+      double dy = pt.y - ry;
+      double lx = dx * cos(yaw) + dy * sin(yaw);
+      double ly = -dx * sin(yaw) + dy * cos(yaw);
+
+      // Poses inside the obstacle box (with 25cm safety buffer on back and sides)
+      bool inside =
+          (lx >= x_front_edge - 0.05) && (lx <= x_front_edge + 2.0 * r + 0.25) && (std::abs(ly - y_local) <= r + 0.20);
+      if (inside) {
         if (block_start == -1) {
           block_start = static_cast<int>(i);
         }
         block_end = static_cast<int>(i);
-      } else if (block_start != -1 && d_sq > r_sq) {
-        // Exited obstacle zone
+      } else if (block_start != -1 && lx > x_front_edge + 2.0 * r + 0.25) {
+        // Exited obstacle zone forward along path
         break;
       }
     }

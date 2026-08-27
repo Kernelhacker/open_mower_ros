@@ -55,6 +55,7 @@
 #include "mower_msgs/MowerControlSrv.h"
 #include "mower_msgs/Status.h"
 #include "ros/ros.h"
+#include "sensor_msgs/Range.h"
 #include "slic3r_coverage_planner/PlanPath.h"
 #include "std_msgs/Empty.h"
 #include "std_msgs/String.h"
@@ -100,6 +101,8 @@ StateSubscriber<mower_msgs::Bms> bms_state_subscriber{"/ll/bms"};
 StateSubscriber<mower_msgs::ESCStatus> left_esc_status_state_subscriber{"/ll/diff_drive/left_esc_status"};
 StateSubscriber<mower_msgs::ESCStatus> right_esc_status_state_subscriber{"/ll/diff_drive/right_esc_status"};
 StateSubscriber<xbot_msgs::AbsolutePose> pose_state_subscriber{"/xbot_positioning/xb_pose"};
+StateSubscriber<sensor_msgs::Range> us_left_state_subscriber{"/ll/ultrasonic/left"};
+StateSubscriber<sensor_msgs::Range> us_right_state_subscriber{"/ll/ultrasonic/right"};
 ros::Time joy_vel_time(0.0);
 
 ros::Time last_good_gps(0.0);
@@ -783,6 +786,8 @@ int main(int argc, char** argv) {
   left_esc_status_state_subscriber.Start(n);
   right_esc_status_state_subscriber.Start(n);
   pose_state_subscriber.Start(n);
+  us_left_state_subscriber.Start(n);
+  us_right_state_subscriber.Start(n);
 
   ros::Subscriber joy_cmd = n->subscribe("/joy_vel", 0, joyVelReceived, ros::TransportHints().tcpNoDelay(true));
   ros::Subscriber action = n->subscribe("xbot/action", 0, actionReceived, ros::TransportHints().tcpNoDelay(true));
