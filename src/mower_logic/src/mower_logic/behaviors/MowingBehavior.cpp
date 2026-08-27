@@ -41,6 +41,8 @@ extern ros::ServiceClient pathClient;
 extern ros::ServiceClient pathProgressClient;
 extern ros::ServiceClient setNavPointClient;
 extern ros::ServiceClient clearNavPointClient;
+extern ros::Publisher add_dynamic_obstacle_pub;
+extern ros::Publisher clear_dynamic_obstacles_pub;
 
 extern xbot_msgs::AbsolutePose getPose();
 
@@ -129,6 +131,7 @@ void MowingBehavior::exit() {
 void MowingBehavior::reset() {
   publishMowerEvent("JOB_COMPLETE");
   publishMowerEvent("TEMPORARY_OBSTACLES_CLEARED", json{{"obstacles", json::array()}});
+  clear_dynamic_obstacles_pub.publish(std_msgs::Empty());
   current_job_finished = true;
   currentMowingPaths.clear();
   temporary_obstacles.clear();
@@ -361,18 +364,23 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
                                            {"polygon", obs_poly_json},
                                            {"obstacles", all_obstacles_json}});
 
+  // Publish temporary obstacle to mower_map_service so global_costmap marks it as occupied
+  add_dynamic_obstacle_pub.publish(obs_poly);
+  ros::Duration(0.15).sleep();
+
   ROS_WARN_STREAM("MowingBehavior: Added temporary no-mow zone at (" << obs_x << ", " << obs_y << ") with radius " << r
-                                                                     << "m. Recalculating coverage plan with Slic3r.");
+                                                                     << "m to costmap. Slicing current path.");
 
   // 4. In-Place Path Slicing & Obstacle Avoidance:
   // Instead of recalculating the entire area with Slic3r (which discards mowed progress and scrambles line ordering),
-  // slice the current path around the obstacle:
+  // slice ONLY the current path around the obstacle:
   // - Poses before the obstacle: already mowed.
   // - Poses inside the obstacle: excluded.
   // - Poses behind the obstacle: preserved as a continuation path so the grass behind the obstacle is fully mowed!
+  // Future paths remain untouched until the robot reaches them, preventing lines from being erroneously skipped.
   if (currentMowingPath >= 0 && currentMowingPath < static_cast<int>(currentMowingPaths.size())) {
     auto& cur_path = currentMowingPaths[currentMowingPath];
-    double r_sq = (r + 0.15) * (r + 0.15);  // Add 15cm margin
+    double r_sq = (r + 0.25) * (r + 0.25);  // 25cm buffer past obstacle edge
 
     // Scan current path from currentMowingPathIndex to find the blocked segment
     int block_start = -1;
@@ -401,9 +409,9 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
                                                     << block_start << " to " << block_end << " of "
                                                     << cur_path.path.poses.size());
 
-    // Check if there are poses behind the obstacle to mow
+    // Check if there are poses behind the obstacle to mow (require at least 3 poses / 30cm)
     slic3r_coverage_planner::Path remainder_path;
-    bool has_remainder = (block_end + 2 < static_cast<int>(cur_path.path.poses.size()));
+    bool has_remainder = (block_end + 3 < static_cast<int>(cur_path.path.poses.size()));
 
     if (has_remainder) {
       remainder_path.is_outline = cur_path.is_outline;
@@ -421,47 +429,6 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     // Insert remainder path right after current path so the robot navigates around the obstacle to finish this line!
     if (has_remainder && !remainder_path.path.poses.empty()) {
       currentMowingPaths.insert(currentMowingPaths.begin() + currentMowingPath + 1, remainder_path);
-    }
-
-    // Slice any future paths that cross this obstacle as well
-    for (size_t next_idx = currentMowingPath + (has_remainder ? 2 : 1); next_idx < currentMowingPaths.size();
-         next_idx++) {
-      auto& future_path = currentMowingPaths[next_idx];
-      int f_start = -1;
-      int f_end = -1;
-      for (size_t i = 0; i < future_path.path.poses.size(); i++) {
-        const auto& pt = future_path.path.poses[i].pose.position;
-        double d_sq = (pt.x - obs_x) * (pt.x - obs_x) + (pt.y - obs_y) * (pt.y - obs_y);
-        if (d_sq <= r_sq) {
-          if (f_start == -1) f_start = static_cast<int>(i);
-          f_end = static_cast<int>(i);
-        } else if (f_start != -1 && d_sq > r_sq) {
-          break;
-        }
-      }
-
-      if (f_start != -1 && f_end != -1) {
-        ROS_INFO_STREAM("MowingBehavior: Future path " << next_idx << " intersects obstacle at poses " << f_start
-                                                       << " to " << f_end << " - slicing.");
-        slic3r_coverage_planner::Path f_remainder;
-        bool f_has_remainder = (f_end + 2 < static_cast<int>(future_path.path.poses.size()));
-        if (f_has_remainder) {
-          f_remainder.is_outline = future_path.is_outline;
-          f_remainder.path.header = future_path.path.header;
-          f_remainder.path.poses.assign(future_path.path.poses.begin() + f_end + 1, future_path.path.poses.end());
-        }
-
-        if (f_start > 0) {
-          future_path.path.poses.resize(f_start);
-        } else {
-          future_path.path.poses.clear();
-        }
-
-        if (f_has_remainder && !f_remainder.path.poses.empty()) {
-          currentMowingPaths.insert(currentMowingPaths.begin() + next_idx + 1, f_remainder);
-          next_idx++;  // Skip the newly inserted remainder
-        }
-      }
     }
 
     // Advance to remainder path (or next path if no remainder)
@@ -692,11 +659,6 @@ bool MowingBehavior::execute_mowing_plan() {
         // we cannot reach the start point
         ROS_ERROR_STREAM("MowingBehavior: (FIRST POINT) - Could not reach goal (first point). Planner Status was: "
                          << current_status.state_);
-        if (handle_obstacle_and_replan(0.5)) {
-          first_point_attempt_counter = 0;
-          first_point_trim_counter = 0;
-          continue;
-        }
         // we have 3 attempts to get to the start pose of the mowing area
         if (first_point_attempt_counter < config.max_first_point_attempts) {
           ROS_WARN_STREAM("MowingBehavior: (FIRST POINT) - Attempt " << first_point_attempt_counter << " / "

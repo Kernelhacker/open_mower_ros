@@ -19,6 +19,7 @@
 #include "grid_map_ros/GridMapRosConverter.hpp"
 #include "grid_map_ros/PolygonRosConverter.hpp"
 #include "ros/ros.h"
+#include "std_msgs/Empty.h"
 #include "std_msgs/String.h"
 #include "visualization_msgs/MarkerArray.h"
 
@@ -195,6 +196,21 @@ MapData map_data;
 
 bool show_fake_obstacle = false;
 geometry_msgs::Pose fake_obstacle_pose;
+
+// Dynamic temporary obstacles from obstacle avoidance
+std::vector<geometry_msgs::Polygon> dynamic_obstacles;
+
+void addDynamicObstacle(const geometry_msgs::Polygon::ConstPtr& msg) {
+  dynamic_obstacles.push_back(*msg);
+  buildMap();
+}
+
+void clearDynamicObstacles(const std_msgs::Empty::ConstPtr& msg) {
+  if (!dynamic_obstacles.empty()) {
+    dynamic_obstacles.clear();
+    buildMap();
+  }
+}
 
 // The grid map. This is built from the polygons loaded from the file.
 grid_map::GridMap map;
@@ -464,6 +480,18 @@ void buildMap() {
         const grid_map::Index index(*iterator);
         data(index[0], index[1]) = 1.0;
       }
+    }
+  }
+
+  // Mark dynamic temporary obstacles from obstacle avoidance
+  for (const auto& poly_msg : dynamic_obstacles) {
+    grid_map::Polygon poly;
+    for (const auto& pt : poly_msg.points) {
+      poly.addVertex(grid_map::Position(pt.x, pt.y));
+    }
+    for (grid_map::PolygonIterator iterator(map, poly); !iterator.isPastEnd(); ++iterator) {
+      const grid_map::Index index(*iterator);
+      data(index[0], index[1]) = 1.0;
     }
   }
 
@@ -803,6 +831,10 @@ int main(int argc, char** argv) {
   ros::ServiceServer set_nav_point_srv = n.advertiseService("mower_map_service/set_nav_point", setNavPoint);
   ros::ServiceServer clear_nav_point_srv = n.advertiseService("mower_map_service/clear_nav_point", clearNavPoint);
   ros::ServiceServer clear_map_srv = n.advertiseService("mower_map_service/clear_map", clearMap);
+
+  ros::Subscriber add_dyn_obs_sub = n.subscribe("mower_map_service/add_dynamic_obstacle", 10, addDynamicObstacle);
+  ros::Subscriber clear_dyn_obs_sub =
+      n.subscribe("mower_map_service/clear_dynamic_obstacles", 1, clearDynamicObstacles);
 
   ros::spin();
   return 0;
