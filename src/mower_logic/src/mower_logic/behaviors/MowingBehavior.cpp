@@ -17,10 +17,12 @@
 #include <cryptopp/cryptlib.h>
 #include <cryptopp/hex.h>
 #include <cryptopp/sha.h>
+#include <geometry_msgs/Polygon.h>
 #include <mbf_msgs/RecoveryAction.h>
 #include <nav_msgs/Path.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
+#include <std_msgs/Empty.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
