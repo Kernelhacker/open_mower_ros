@@ -203,8 +203,8 @@ int main(int argc, char** argv) {
   static tf2_ros::StaticTransformBroadcaster static_broadcaster;
   std::vector<geometry_msgs::TransformStamped> static_transforms;
 
-  double us_left_x = 0.3, us_left_y = 0.15, us_left_z = 0.1;
-  double us_left_yaw = 0.5, us_left_pitch = 0.0, us_left_roll = 0.0;
+  double us_left_x = 0.18, us_left_y = 0.105, us_left_z = 0.1;
+  double us_left_yaw = 0.0, us_left_pitch = 0.0, us_left_roll = 0.0;
   paramNh.getParam("ultrasonic/left/x", us_left_x);
   paramNh.getParam("ultrasonic/left/y", us_left_y);
   paramNh.getParam("ultrasonic/left/z", us_left_z);
@@ -227,8 +227,8 @@ int main(int argc, char** argv) {
   tf_left.transform.rotation.w = q_left.w();
   static_transforms.push_back(tf_left);
 
-  double us_right_x = 0.3, us_right_y = -0.15, us_right_z = 0.1;
-  double us_right_yaw = -0.5, us_right_pitch = 0.0, us_right_roll = 0.0;
+  double us_right_x = 0.18, us_right_y = -0.105, us_right_z = 0.1;
+  double us_right_yaw = 0.0, us_right_pitch = 0.0, us_right_roll = 0.0;
   paramNh.getParam("ultrasonic/right/x", us_right_x);
   paramNh.getParam("ultrasonic/right/y", us_right_y);
   paramNh.getParam("ultrasonic/right/z", us_right_z);

@@ -328,11 +328,22 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
   tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
 
   // 1. Read ultrasonic sensors to estimate obstacle distance and lateral offset
-  const double US_X_OFFSET = 0.30;  // Sensors mounted ~30cm in front of base_link
-  const double US_Y_OFFSET = 0.15;  // Left at +15cm, right at -15cm
+  // Physical mower dimensions dynamically loaded from config / ROS parameters
+  double mower_length = config.mower_length > 0.1 ? config.mower_length : 0.46;
+  double mower_axle_from_rear = config.mower_axle_from_rear >= 0.0 ? config.mower_axle_from_rear : 0.10;
+  double mower_front_x = mower_length - mower_axle_from_rear;  // Front bumper from base_link
 
-  double d_front = lookahead_dist;  // Fallback distance ahead of sensor
-  double y_local = 0.0;             // Lateral offset in robot frame (0 = centered)
+  double us_left_x = 0.18, us_left_y = 0.105, us_left_yaw = 0.0;
+  double us_right_x = 0.18, us_right_y = -0.105, us_right_yaw = 0.0;
+  ros::NodeHandle nh("~");
+  nh.getParam("ultrasonic/left/x", us_left_x);
+  nh.getParam("ultrasonic/left/y", us_left_y);
+  nh.getParam("ultrasonic/left/yaw", us_left_yaw);
+  nh.getParam("ultrasonic/right/x", us_right_x);
+  nh.getParam("ultrasonic/right/y", us_right_y);
+  nh.getParam("ultrasonic/right/yaw", us_right_yaw);
+
+  double y_local = 0.0;  // Lateral offset in robot frame (0 = centered)
   bool left_detected = false;
   bool right_detected = false;
   double left_range = 2.0;
@@ -359,31 +370,48 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     }
   }
 
+  double x_front_edge;
   if (left_detected && right_detected) {
-    d_front = std::min(left_range, right_range);
-    double diff = right_range - left_range;  // Positive if left is closer
-    y_local = std::max(-US_Y_OFFSET, std::min(US_Y_OFFSET, diff * 0.5));
-    ROS_INFO_STREAM("MowingBehavior: Both US sensors detected obstacle (left: "
-                    << left_range << "m, right: " << right_range << "m) -> d_front=" << d_front
-                    << "m, y_offset=" << y_local << "m");
+    // Project detected distance through each sensor's mounting orientation
+    double obs_x_l = us_left_x + left_range * std::cos(us_left_yaw);
+    double obs_y_l = us_left_y + left_range * std::sin(us_left_yaw);
+    double obs_x_r = us_right_x + right_range * std::cos(us_right_yaw);
+    double obs_y_r = us_right_y + right_range * std::sin(us_right_yaw);
+
+    double x_min = std::min(obs_x_l, obs_x_r);
+    x_front_edge = std::max(mower_front_x + 0.05, x_min);
+
+    // Weighted lateral position between the two sensor contacts
+    double diff = right_range - left_range;  // positive if left is closer
+    double t = 0.5 - std::max(-0.5, std::min(0.5, diff * 1.5));
+    y_local = obs_y_l * (1.0 - t) + obs_y_r * t;
+
+    ROS_INFO_STREAM("MowingBehavior: Both US sensors detected obstacle (L: "
+                    << left_range << "m at " << us_left_yaw << "rad, R: " << right_range << "m at " << us_right_yaw
+                    << "rad) -> x_front=" << x_front_edge << "m, y=" << y_local << "m");
   } else if (left_detected) {
-    d_front = left_range;
-    y_local = US_Y_OFFSET;
-    ROS_INFO_STREAM("MowingBehavior: Left US sensor detected obstacle (range: "
-                    << left_range << "m) -> d_front=" << d_front << "m, y_offset=" << y_local << "m");
+    double obs_x_l = us_left_x + left_range * std::cos(us_left_yaw);
+    double obs_y_l = us_left_y + left_range * std::sin(us_left_yaw);
+    x_front_edge = std::max(mower_front_x + 0.05, obs_x_l);
+    y_local = obs_y_l;
+    ROS_INFO_STREAM("MowingBehavior: Left US sensor detected obstacle (range: " << left_range << "m at " << us_left_yaw
+                                                                                << "rad) -> x_front=" << x_front_edge
+                                                                                << "m, y=" << y_local << "m");
   } else if (right_detected) {
-    d_front = right_range;
-    y_local = -US_Y_OFFSET;
+    double obs_x_r = us_right_x + right_range * std::cos(us_right_yaw);
+    double obs_y_r = us_right_y + right_range * std::sin(us_right_yaw);
+    x_front_edge = std::max(mower_front_x + 0.05, obs_x_r);
+    y_local = obs_y_r;
     ROS_INFO_STREAM("MowingBehavior: Right US sensor detected obstacle (range: "
-                    << right_range << "m) -> d_front=" << d_front << "m, y_offset=" << y_local << "m");
+                    << right_range << "m at " << us_right_yaw << "rad) -> x_front=" << x_front_edge
+                    << "m, y=" << y_local << "m");
   } else {
-    d_front = 0.20;  // Fallback: 20cm ahead of sensor if stopped by motor/controller
+    // Fallback: place obstacle 15cm ahead of mower's front bumper
+    x_front_edge = mower_front_x + 0.15;
     y_local = 0.0;
-    ROS_INFO_STREAM("MowingBehavior: No active US reading, using fallback d_front=" << d_front << "m");
+    ROS_INFO_STREAM("MowingBehavior: No active US reading, using fallback x_front=" << x_front_edge << "m");
   }
 
-  // Distance from robot center (base_link) to the beginning (front edge) of the obstacle
-  double x_front_edge = US_X_OFFSET + d_front;
   double r = config.obstacle_exclusion_radius;
 
   // The beginning of the obstacle box is ALWAYS fixed at x_front_edge (the detected surface),
@@ -420,12 +448,14 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     for (const auto& pt : poly.points) {
       poly_pts.push_back(json{{"x", pt.x}, {"y", pt.y}});
     }
-    all_obstacles_json.push_back(json{{"x", obs_x}, {"y", obs_y}, {"radius", r}, {"polygon", poly_pts}});
+    all_obstacles_json.push_back(
+        json{{"x", obs_x}, {"y", obs_y}, {"radius", r}, {"heading", yaw}, {"polygon", poly_pts}});
   }
 
   publishMowerEvent("OBSTACLE_ADDED", json{{"obstacle_x", obs_x},
                                            {"obstacle_y", obs_y},
                                            {"radius", r},
+                                           {"heading", yaw},
                                            {"polygon", obs_poly_json},
                                            {"obstacles", all_obstacles_json}});
 
