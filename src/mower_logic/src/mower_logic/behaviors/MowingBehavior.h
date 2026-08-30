@@ -50,6 +50,7 @@ class MowingBehavior : public Behavior {
   std::string currentMowingAreaName;
   std::string currentMowingPlanDigest;
   double currentMowingAngleIncrementSum;
+  geometry_msgs::Polygon currentMowingAreaOutline;
 
  public:
   MowingBehavior();

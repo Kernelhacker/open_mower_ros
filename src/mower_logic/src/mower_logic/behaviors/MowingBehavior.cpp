@@ -241,6 +241,7 @@ bool MowingBehavior::create_mowing_plan(int area_index) {
   pathSrv.request.outline_overlap_count =
       overrideOrGlobal(area.outline_overlap_count, config.outline_overlap_count, -1);
   pathSrv.request.outline = area.area;
+  currentMowingAreaOutline = area.area;
   pathSrv.request.holes = area.obstacles;
   for (const auto& temp_obs : temporary_obstacles) {
     pathSrv.request.holes.push_back(temp_obs);
@@ -371,12 +372,25 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
   }
 
   double x_front_edge;
+  double obs_heading = yaw;  // Default: aligned with mower heading
+
   if (left_detected && right_detected) {
     // Project detected distance through each sensor's mounting orientation
     double obs_x_l = us_left_x + left_range * std::cos(us_left_yaw);
     double obs_y_l = us_left_y + left_range * std::sin(us_left_yaw);
     double obs_x_r = us_right_x + right_range * std::cos(us_right_yaw);
     double obs_y_r = us_right_y + right_range * std::sin(us_right_yaw);
+
+    // Vector from right contact point to left contact point on obstacle surface
+    double dx_surf = obs_x_l - obs_x_r;
+    double dy_surf = obs_y_l - obs_y_r;
+
+    // Angle of obstacle surface tilt relative to robot
+    double delta_yaw = std::atan2(dx_surf, dy_surf);
+    // Bound tilt to reasonable physical range (-45 deg to +45 deg) to reject spurious reflections
+    delta_yaw = std::max(-M_PI / 4.0, std::min(M_PI / 4.0, delta_yaw));
+
+    obs_heading = yaw - delta_yaw;
 
     double x_min = std::min(obs_x_l, obs_x_r);
     x_front_edge = std::max(mower_front_x + 0.05, x_min);
@@ -388,7 +402,8 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
 
     ROS_INFO_STREAM("MowingBehavior: Both US sensors detected obstacle (L: "
                     << left_range << "m at " << us_left_yaw << "rad, R: " << right_range << "m at " << us_right_yaw
-                    << "rad) -> x_front=" << x_front_edge << "m, y=" << y_local << "m");
+                    << "rad) -> tilt=" << (delta_yaw * 180.0 / M_PI) << "deg, obs_heading="
+                    << (obs_heading * 180.0 / M_PI) << "deg, x_front=" << x_front_edge << "m, y=" << y_local << "m");
   } else if (left_detected) {
     double obs_x_l = us_left_x + left_range * std::cos(us_left_yaw);
     double obs_y_l = us_left_y + left_range * std::sin(us_left_yaw);
@@ -416,63 +431,79 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
 
   // The beginning of the obstacle box is ALWAYS fixed at x_front_edge (the detected surface),
   // completely independent of the box size (r)!
-  // The box extends forward from x_front_edge to (x_front_edge + 2 * r), and laterally y_local +/- r.
-  // Center of the box in robot coordinates: (x_front_edge + r, y_local)
-  double obs_x = rx + (x_front_edge + r) * cos(yaw) - y_local * sin(yaw);
-  double obs_y = ry + (x_front_edge + r) * sin(yaw) + y_local * cos(yaw);
+  // Front center of obstacle in map coordinates:
+  double front_center_x = rx + x_front_edge * cos(yaw) - y_local * sin(yaw);
+  double front_center_y = ry + x_front_edge * sin(yaw) + y_local * cos(yaw);
 
-  auto localToMap = [&](double lx, double ly) {
-    geometry_msgs::Point32 pt;
-    pt.x = rx + lx * cos(yaw) - ly * sin(yaw);
-    pt.y = ry + lx * sin(yaw) + ly * cos(yaw);
-    return pt;
-  };
+  // Unit vectors oriented along the obstacle's estimated surface normal and tangent:
+  double u_obs_fwd_x = cos(obs_heading);
+  double u_obs_fwd_y = sin(obs_heading);
+  double u_obs_left_x = -sin(obs_heading);
+  double u_obs_left_y = cos(obs_heading);
+
+  // Center of the obstacle box in map coordinates:
+  double obs_x = front_center_x + r * u_obs_fwd_x;
+  double obs_y = front_center_y + r * u_obs_fwd_y;
 
   // Create oriented rectangle polygon:
-  // Front edge is at x_front_edge, rear edge is at x_front_edge + 2 * r
+  // Front edge is anchored at front_center, rear edge is 2*r along u_obs_fwd, lateral span is +/- r along u_obs_left
   geometry_msgs::Polygon obs_poly;
-  obs_poly.points.push_back(localToMap(x_front_edge, y_local - r));            // Front-Right
-  obs_poly.points.push_back(localToMap(x_front_edge + 2.0 * r, y_local - r));  // Back-Right
-  obs_poly.points.push_back(localToMap(x_front_edge + 2.0 * r, y_local + r));  // Back-Left
-  obs_poly.points.push_back(localToMap(x_front_edge, y_local + r));            // Front-Left
-  temporary_obstacles.push_back(obs_poly);
+  geometry_msgs::Point32 p;
 
-  json obs_poly_json = json::array();
-  for (const auto& pt : obs_poly.points) {
-    obs_poly_json.push_back(json{{"x", pt.x}, {"y", pt.y}});
-  }
+  // 1. Front-Right
+  p.x = front_center_x - r * u_obs_left_x;
+  p.y = front_center_y - r * u_obs_left_y;
+  obs_poly.points.push_back(p);
 
-  json all_obstacles_json = json::array();
-  for (const auto& poly : temporary_obstacles) {
-    json poly_pts = json::array();
-    for (const auto& pt : poly.points) {
-      poly_pts.push_back(json{{"x", pt.x}, {"y", pt.y}});
+  // 2. Back-Right
+  p.x = front_center_x - r * u_obs_left_x + 2.0 * r * u_obs_fwd_x;
+  p.y = front_center_y - r * u_obs_left_y + 2.0 * r * u_obs_fwd_y;
+  obs_poly.points.push_back(p);
+
+  // 3. Back-Left
+  p.x = front_center_x + r * u_obs_left_x + 2.0 * r * u_obs_fwd_x;
+  p.y = front_center_y + r * u_obs_left_y + 2.0 * r * u_obs_fwd_y;
+  obs_poly.points.push_back(p);
+
+  // 4. Front-Left
+  p.x = front_center_x + r * u_obs_left_x;
+  p.y = front_center_y + r * u_obs_left_y;
+  obs_poly.points.push_back(p);
+
+  // 1. Boundary check: If the obstacle is located outside the active mowing area, ignore it!
+  // (e.g. Ultrasonic sensor detected a fence, hedge, or wall outside the lawn perimeter)
+  auto isPointInPolygon = [](double x, double y, const std::vector<geometry_msgs::Point32>& poly) {
+    bool inside = false;
+    size_t n = poly.size();
+    for (size_t i = 0, j = n - 1; i < n; j = i++) {
+      double xi = poly[i].x, yi = poly[i].y;
+      double xj = poly[j].x, yj = poly[j].y;
+      bool intersect = ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
     }
-    all_obstacles_json.push_back(
-        json{{"x", obs_x}, {"y", obs_y}, {"radius", r}, {"heading", yaw}, {"polygon", poly_pts}});
+    return inside;
+  };
+
+  if (!currentMowingAreaOutline.points.empty()) {
+    bool in_area = isPointInPolygon(obs_x, obs_y, currentMowingAreaOutline.points);
+    if (!in_area) {
+      for (const auto& pt : obs_poly.points) {
+        if (isPointInPolygon(pt.x, pt.y, currentMowingAreaOutline.points)) {
+          in_area = true;
+          break;
+        }
+      }
+    }
+    if (!in_area) {
+      ROS_WARN_STREAM("MowingBehavior: Detected obstacle at ("
+                      << obs_x << ", " << obs_y
+                      << ") is outside the mowing area boundary. Ignoring to prevent unnecessary detours.");
+      return false;
+    }
   }
 
-  publishMowerEvent("OBSTACLE_ADDED", json{{"obstacle_x", obs_x},
-                                           {"obstacle_y", obs_y},
-                                           {"radius", r},
-                                           {"heading", yaw},
-                                           {"polygon", obs_poly_json},
-                                           {"obstacles", all_obstacles_json}});
-
-  // Publish temporary obstacle to mower_map_service so global_costmap marks it as occupied
-  add_dynamic_obstacle_pub.publish(obs_poly);
-  ros::Duration(0.15).sleep();
-
-  ROS_WARN_STREAM("MowingBehavior: Added temporary no-mow zone at (" << obs_x << ", " << obs_y << ") with radius " << r
-                                                                     << "m to costmap. Slicing current path.");
-
-  // 4. In-Place Path Slicing & Obstacle Avoidance:
-  // Instead of recalculating the entire area with Slic3r (which discards mowed progress and scrambles line ordering),
-  // slice ONLY the current path around the obstacle:
-  // - Poses before the obstacle: already mowed.
-  // - Poses inside the obstacle: excluded.
-  // - Poses behind the obstacle: preserved as a continuation path so the grass behind the obstacle is fully mowed!
-  // Future paths remain untouched until the robot reaches them, preventing lines from being erroneously skipped.
+  // 2. Path Slicing & Obstacle Avoidance:
+  // Check if the current path is actually blocked by this obstacle
   if (currentMowingPath >= 0 && currentMowingPath < static_cast<int>(currentMowingPaths.size())) {
     auto& cur_path = currentMowingPaths[currentMowingPath];
 
@@ -510,12 +541,43 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
       }
     }
 
-    // Fallback: If no pose in the immediate window matched (e.g. sharp corner or tight clearance),
-    // the obstacle stopped the robot directly at currentMowingPathIndex. Block the immediate 4 poses.
+    // If the obstacle does not block the current path (e.g. obstacle is off to the side), do not slice or detour!
     if (block_start == -1) {
-      block_start = currentMowingPathIndex;
-      block_end = std::min(currentMowingPathIndex + 4, static_cast<int>(cur_path.path.poses.size()) - 1);
+      ROS_INFO_STREAM("MowingBehavior: Detected obstacle does not intersect current path. Continuing path execution.");
+      return false;
     }
+
+    // Obstacle is inside the mowing area AND blocks the current path -> Register obstacle and slice path!
+    temporary_obstacles.push_back(obs_poly);
+
+    json obs_poly_json = json::array();
+    for (const auto& pt : obs_poly.points) {
+      obs_poly_json.push_back(json{{"x", pt.x}, {"y", pt.y}});
+    }
+
+    json all_obstacles_json = json::array();
+    for (const auto& poly : temporary_obstacles) {
+      json poly_pts = json::array();
+      for (const auto& pt : poly.points) {
+        poly_pts.push_back(json{{"x", pt.x}, {"y", pt.y}});
+      }
+      all_obstacles_json.push_back(
+          json{{"x", obs_x}, {"y", obs_y}, {"radius", r}, {"heading", obs_heading}, {"polygon", poly_pts}});
+    }
+
+    publishMowerEvent("OBSTACLE_ADDED", json{{"obstacle_x", obs_x},
+                                             {"obstacle_y", obs_y},
+                                             {"radius", r},
+                                             {"heading", obs_heading},
+                                             {"polygon", obs_poly_json},
+                                             {"obstacles", all_obstacles_json}});
+
+    // Publish temporary obstacle to mower_map_service so global_costmap marks it as occupied
+    add_dynamic_obstacle_pub.publish(obs_poly);
+    ros::Duration(0.15).sleep();
+
+    ROS_WARN_STREAM("MowingBehavior: Added temporary no-mow zone at (" << obs_x << ", " << obs_y << ") with radius "
+                                                                       << r << "m to costmap. Slicing current path.");
 
     ROS_INFO_STREAM("MowingBehavior: Slicing path " << currentMowingPath << " around obstacle: blocked poses "
                                                     << block_start << " to " << block_end << " of "
