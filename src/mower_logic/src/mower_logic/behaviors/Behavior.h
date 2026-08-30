@@ -39,6 +39,7 @@ using json = nlohmann::ordered_json;
 extern void publishMowerEvent(const std::string& type, json details = json::object());
 extern void broadcastAudioMessage(const std::string& message);
 extern void publishMqtt(const std::string& topic, const json& payload, bool retain = false);
+extern void setCmdVel(double linear_x, double angular_z);
 
 /**
  * Behavior definition

@@ -260,6 +260,13 @@ void publishMqtt(const std::string& topic, const json& payload, bool retain) {
   xbot_mqtt::publish(mqtt_publish_pub, topic, payload, retain);
 }
 
+void setCmdVel(double linear_x, double angular_z) {
+  geometry_msgs::Twist twist;
+  twist.linear.x = linear_x;
+  twist.angular.z = angular_z;
+  cmd_vel_pub.publish(twist);
+}
+
 void broadcastAudioMessage(const std::string& message) {
   if (message.empty()) return;
   std_msgs::String msg;
