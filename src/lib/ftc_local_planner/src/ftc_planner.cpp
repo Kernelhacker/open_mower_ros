@@ -651,8 +651,9 @@ namespace ftc_local_planner
                 {
                     debugObstacle(obstacle_marker, x, y, costs, max_points);
                 }
-                // Trigger only if the path enters a lethal or inscribed obstacle (ignore low inflation cost and NO_INFORMATION)
-                if (costs >= costmap_2d::INSCRIBED_INFLATED_OBSTACLE && costs != costmap_2d::NO_INFORMATION)
+                // Trigger only if the path enters an actual LETHAL obstacle / wall (cost 254).
+                // Do not trigger on inflation zone (cost 253), which is present on valid perimeter mowing lines.
+                if (costs == costmap_2d::LETHAL_OBSTACLE)
                 {
                     ROS_WARN_THROTTLE(2.0, "FTCLocalPlannerROS: Possible collision on path at index %zu (cost %d). Stop local planner.", index, costs);
                     return true;
