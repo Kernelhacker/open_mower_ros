@@ -476,11 +476,14 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
   if (currentMowingPath >= 0 && currentMowingPath < static_cast<int>(currentMowingPaths.size())) {
     auto& cur_path = currentMowingPaths[currentMowingPath];
 
-    // Scan current path from currentMowingPathIndex to find the blocked segment
+    // Scan current path starting from currentMowingPathIndex to find the immediate blocked segment.
+    // Limit search window to the immediate vicinity (at most 40 poses / ~3-4 meters ahead)
+    // so we NEVER falsely match a future outline loop or subsequent parallel sweep hundreds of poses later!
     int block_start = -1;
     int block_end = -1;
+    size_t search_limit = std::min(cur_path.path.poses.size(), static_cast<size_t>(currentMowingPathIndex + 40));
 
-    for (size_t i = currentMowingPathIndex; i < cur_path.path.poses.size(); i++) {
+    for (size_t i = currentMowingPathIndex; i < search_limit; i++) {
       const auto& pt = cur_path.path.poses[i].pose.position;
       // Project pose into robot local coordinate frame
       double dx = pt.x - rx;
@@ -488,20 +491,27 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
       double lx = dx * cos(yaw) + dy * sin(yaw);
       double ly = -dx * sin(yaw) + dy * cos(yaw);
 
-      // Poses inside the obstacle box (with 25cm safety buffer on back and sides)
-      bool inside =
-          (lx >= x_front_edge - 0.05) && (lx <= x_front_edge + 2.0 * r + 0.25) && (std::abs(ly - y_local) <= r + 0.20);
+      // Distance to obstacle center
+      double d_to_obs = std::hypot(pt.x - obs_x, pt.y - obs_y);
+
+      // A pose is blocked if it is inside the oriented obstacle box OR within (r + 0.25m) of the obstacle
+      bool inside = ((lx >= x_front_edge - 0.10) && (lx <= x_front_edge + 2.0 * r + 0.30) &&
+                     (std::abs(ly - y_local) <= r + 0.25)) ||
+                    (d_to_obs <= r + 0.25);
+
       if (inside) {
         if (block_start == -1) {
           block_start = static_cast<int>(i);
         }
         block_end = static_cast<int>(i);
-      } else if (block_start != -1 && lx > x_front_edge + 2.0 * r + 0.25) {
-        // Exited obstacle zone forward along path
+      } else if (block_start != -1) {
+        // Exited the immediate obstacle zone along the path!
         break;
       }
     }
 
+    // Fallback: If no pose in the immediate window matched (e.g. sharp corner or tight clearance),
+    // the obstacle stopped the robot directly at currentMowingPathIndex. Block the immediate 4 poses.
     if (block_start == -1) {
       block_start = currentMowingPathIndex;
       block_end = std::min(currentMowingPathIndex + 4, static_cast<int>(cur_path.path.poses.size()) - 1);
