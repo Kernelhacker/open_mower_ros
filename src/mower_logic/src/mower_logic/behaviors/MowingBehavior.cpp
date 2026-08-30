@@ -137,6 +137,7 @@ void MowingBehavior::reset() {
   publishMowerEvent("JOB_COMPLETE");
   publishMowerEvent("TEMPORARY_OBSTACLES_CLEARED", json{{"obstacles", json::array()}});
   clear_dynamic_obstacles_pub.publish(std_msgs::Empty());
+  publishMqtt("temporary_obstacles/json", json::array(), true);
   current_job_finished = true;
   currentMowingPaths.clear();
   temporary_obstacles.clear();
@@ -571,6 +572,9 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
                                              {"heading", obs_heading},
                                              {"polygon", obs_poly_json},
                                              {"obstacles", all_obstacles_json}});
+
+    // Publish retained temporary obstacles topic to MQTT so late-joining Web GUIs display them immediately
+    publishMqtt("temporary_obstacles/json", all_obstacles_json, true);
 
     // Publish temporary obstacle to mower_map_service so global_costmap marks it as occupied
     add_dynamic_obstacle_pub.publish(obs_poly);

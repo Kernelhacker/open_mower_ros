@@ -256,6 +256,10 @@ void publishMowerEvent(const std::string& type, json details) {
   xbot_mqtt::publishEvent(mqtt_publish_pub, type, details);
 }
 
+void publishMqtt(const std::string& topic, const json& payload, bool retain) {
+  xbot_mqtt::publish(mqtt_publish_pub, topic, payload, retain);
+}
+
 void broadcastAudioMessage(const std::string& message) {
   if (message.empty()) return;
   std_msgs::String msg;
