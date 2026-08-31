@@ -36,6 +36,7 @@
 #include "mower_map/ClearNavPointSrv.h"
 #include "mower_map/GetMowingAreaSrv.h"
 #include "mower_map/SetNavPointSrv.h"
+#include "mower_msgs/Emergency.h"
 #include "mower_msgs/Status.h"
 #include "xbot_msgs/AbsolutePose.h"
 
