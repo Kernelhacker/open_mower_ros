@@ -1181,7 +1181,8 @@ bool MowingBehavior::execute_mowing_plan() {
             // if a physical bumper collision occurred or mower is stuck in emergency,
             // NEVER for ultrasonic non-contact sensor events!
             bool is_physical_emergency =
-                emergency_state_subscriber.hasMessage() && emergency_state_subscriber.getMessage().is_emergency;
+                emergency_state_subscriber.hasMessage() && (emergency_state_subscriber.getMessage().active_emergency ||
+                                                            emergency_state_subscriber.getMessage().latched_emergency);
 
             if (is_physical_emergency && hasGoodGPS() && !aborted) {
               mowerEnabled = false;
