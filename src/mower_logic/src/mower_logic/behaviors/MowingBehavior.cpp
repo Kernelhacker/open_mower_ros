@@ -340,10 +340,11 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
 
   auto collect_samples = [&](double cur_rx, double cur_ry, double cur_yaw) {
     ros::Time t_sample = ros::Time::now();
+    double max_scan_range = std::max(1.2, config.obstacle_detection_distance + 0.2);
     if (us_left_state_subscriber.hasMessage()) {
       auto msg = us_left_state_subscriber.getMessage();
       double age = (t_sample - us_left_state_subscriber.getMessageTime()).toSec();
-      if (age < 0.5 && msg.range >= msg.min_range && msg.range < 1.2 && !std::isnan(msg.range) &&
+      if (age < 0.5 && msg.range >= msg.min_range && msg.range < max_scan_range && !std::isnan(msg.range) &&
           !std::isinf(msg.range)) {
         double lx = us_left_x + msg.range * std::cos(us_left_yaw);
         double ly = us_left_y + msg.range * std::sin(us_left_yaw);
@@ -355,7 +356,7 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     if (us_right_state_subscriber.hasMessage()) {
       auto msg = us_right_state_subscriber.getMessage();
       double age = (t_sample - us_right_state_subscriber.getMessageTime()).toSec();
-      if (age < 0.5 && msg.range >= msg.min_range && msg.range < 1.2 && !std::isnan(msg.range) &&
+      if (age < 0.5 && msg.range >= msg.min_range && msg.range < max_scan_range && !std::isnan(msg.range) &&
           !std::isinf(msg.range)) {
         double lx = us_right_x + msg.range * std::cos(us_right_yaw);
         double ly = us_right_y + msg.range * std::sin(us_right_yaw);
@@ -539,11 +540,12 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     bool left_detected = false, right_detected = false;
     double left_range = 2.0, right_range = 2.0;
     ros::Time now = ros::Time::now();
+    double max_scan_range = std::max(1.2, config.obstacle_detection_distance + 0.2);
 
     if (us_left_state_subscriber.hasMessage()) {
       auto msg = us_left_state_subscriber.getMessage();
       double age = (now - us_left_state_subscriber.getMessageTime()).toSec();
-      if (age < 2.0 && msg.range >= msg.min_range && msg.range < 1.2 && !std::isnan(msg.range) &&
+      if (age < 2.0 && msg.range >= msg.min_range && msg.range < max_scan_range && !std::isnan(msg.range) &&
           !std::isinf(msg.range)) {
         left_range = msg.range;
         left_detected = true;
@@ -553,7 +555,7 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     if (us_right_state_subscriber.hasMessage()) {
       auto msg = us_right_state_subscriber.getMessage();
       double age = (now - us_right_state_subscriber.getMessageTime()).toSec();
-      if (age < 2.0 && msg.range >= msg.min_range && msg.range < 1.2 && !std::isnan(msg.range) &&
+      if (age < 2.0 && msg.range >= msg.min_range && msg.range < max_scan_range && !std::isnan(msg.range) &&
           !std::isinf(msg.range)) {
         right_range = msg.range;
         right_detected = true;
@@ -1088,6 +1090,7 @@ bool MowingBehavior::execute_mowing_plan() {
       sleep(1);
       actionlib::SimpleClientGoalState current_status(actionlib::SimpleClientGoalState::PENDING);
       ros::Rate r(10);
+      int consecutive_obstacle_detections = 0;
 
       // wait for path execution to finish
       while (ros::ok()) {
@@ -1132,6 +1135,45 @@ bool MowingBehavior::execute_mowing_plan() {
             ROS_INFO_STREAM_THROTTLE(
                 5, "MowingBehavior: (MOW) Progress: " << currentMowingPathIndex << "/" << path.path.poses.size());
             if (ros::Time::now() - last_checkpoint > ros::Duration(30.0)) checkpoint();
+
+            // Active ultrasonic obstacle detection while driving
+            auto current_cfg = getConfig();
+            if (current_cfg.dynamic_obstacle_avoidance) {
+              double detect_dist = current_cfg.obstacle_detection_distance;
+              ros::Time now = ros::Time::now();
+              bool us_detected = false;
+
+              if (us_left_state_subscriber.hasMessage()) {
+                auto msg = us_left_state_subscriber.getMessage();
+                double age = (now - us_left_state_subscriber.getMessageTime()).toSec();
+                if (age < 0.3 && msg.range >= msg.min_range && msg.range < detect_dist && !std::isnan(msg.range) &&
+                    !std::isinf(msg.range)) {
+                  us_detected = true;
+                }
+              }
+
+              if (us_right_state_subscriber.hasMessage()) {
+                auto msg = us_right_state_subscriber.getMessage();
+                double age = (now - us_right_state_subscriber.getMessageTime()).toSec();
+                if (age < 0.3 && msg.range >= msg.min_range && msg.range < detect_dist && !std::isnan(msg.range) &&
+                    !std::isinf(msg.range)) {
+                  us_detected = true;
+                }
+              }
+
+              if (us_detected) {
+                consecutive_obstacle_detections++;
+                if (consecutive_obstacle_detections >= 2) {
+                  ROS_WARN_STREAM("MowingBehavior: (MOW) Obstacle detected ahead by ultrasonic sensors within "
+                                  << detect_dist << "m! Stopping path execution to initiate obstacle avoidance.");
+                  mbfClientExePath->cancelAllGoals();
+                  mowerEnabled = false;
+                  break;  // Exit path execution loop to trigger handle_obstacle_and_replan
+                }
+              } else {
+                consecutive_obstacle_detections = 0;
+              }
+            }
           }
         } else {
           ROS_INFO_STREAM("MowingBehavior: (MOW)  Got status " << current_status.state_
