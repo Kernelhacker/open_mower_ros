@@ -654,7 +654,8 @@ void checkSafety(const ros::TimerEvent& timer_event) {
 
   if (dockingNeeded && currentBehavior != &DockingBehavior::INSTANCE &&
       currentBehavior != &UndockingBehavior::RETRY_INSTANCE && currentBehavior != &IdleBehavior::INSTANCE &&
-      currentBehavior != &IdleBehavior::DOCKED_INSTANCE) {
+      currentBehavior != &IdleBehavior::DOCKED_INSTANCE &&
+      currentBehavior != &AreaRecordingBehavior::INSTANCE) {
     ROS_INFO_STREAM("Docking: " << dockingReason.rdbuf());
     publishMowerEvent("DOCKING", json{{"reason", dockingReason.str()}});
     abortExecution();

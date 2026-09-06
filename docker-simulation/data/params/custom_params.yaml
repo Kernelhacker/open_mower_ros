@@ -81,10 +81,11 @@ mower_logic:
 
   # Dynamic obstacle avoidance & detour mowing
   dynamic_obstacle_avoidance: false
+  obstacle_detection_on_outlines: true   # Set to false to disable obstacle detection on outer lines (perimeter)
   mow_during_obstacle_detour: false
   obstacle_detection_distance: 0.60
   obstacle_grace_time: 5.0
-  obstacle_exclusion_radius: 0.45
+  obstacle_exclusion_radius: 0.30
   enable_obstacle_pan_scan: true
   obstacle_pan_angle_deg: 15.0
   obstacle_pan_speed: 1.2

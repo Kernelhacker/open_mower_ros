@@ -311,6 +311,14 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     return false;
   }
 
+  if (currentMowingPath >= 0 && currentMowingPath < static_cast<int>(currentMowingPaths.size())) {
+    if (currentMowingPaths[currentMowingPath].is_outline && !config.obstacle_detection_on_outlines) {
+      ROS_INFO_STREAM("MowingBehavior: Obstacle avoidance disabled on outer lines. Ignoring obstacle on path "
+                      << currentMowingPath);
+      return false;
+    }
+  }
+
   ROS_WARN_STREAM("MowingBehavior: Dynamic Obstacle Avoidance - Obstacle detected on path "
                   << currentMowingPath << " at index " << currentMowingPathIndex << ". Starting grace period of "
                   << config.obstacle_grace_time << "s.");
@@ -1193,7 +1201,8 @@ bool MowingBehavior::execute_mowing_plan() {
 
             // Active ultrasonic obstacle detection while driving
             auto current_cfg = getConfig();
-            if (current_cfg.dynamic_obstacle_avoidance) {
+            if (current_cfg.dynamic_obstacle_avoidance &&
+                (!path.is_outline || current_cfg.obstacle_detection_on_outlines)) {
               double detect_dist = current_cfg.obstacle_detection_distance;
               double mower_length = current_cfg.mower_length > 0.1 ? current_cfg.mower_length : 0.46;
               double mower_axle_from_rear =
@@ -1306,7 +1315,7 @@ bool MowingBehavior::execute_mowing_plan() {
           if (currentMowingPathIndex == 0) currentMowingPathIndex++;
           if (!requested_pause_flag) {
             auto config = getConfig();
-            if (config.dynamic_obstacle_avoidance) {
+            if (config.dynamic_obstacle_avoidance && (!path.is_outline || config.obstacle_detection_on_outlines)) {
               if (handle_obstacle_and_replan(0.5)) {
                 continue;
               }
