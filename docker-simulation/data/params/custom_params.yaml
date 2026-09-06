@@ -79,6 +79,16 @@ mower_logic:
   # set this to true to enable the mow-motor
   enable_mower: false
 
+  # Dynamic obstacle avoidance & detour mowing
+  dynamic_obstacle_avoidance: false
+  mow_during_obstacle_detour: false
+  obstacle_detection_distance: 0.60
+  obstacle_grace_time: 5.0
+  obstacle_exclusion_radius: 0.45
+  enable_obstacle_pan_scan: true
+  obstacle_pan_angle_deg: 15.0
+  obstacle_pan_speed: 1.2
+
 xbot_monitoring:
   # For an external (e.g. Home Assistant) integration only - the app itself doesn't use
   # this, it talks to the broker directly over ws://<host>:9001.

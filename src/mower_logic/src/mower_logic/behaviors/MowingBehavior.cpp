@@ -501,27 +501,42 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
       double min_x = *std::min_element(local_xs.begin(), local_xs.end());
       x_front_edge = std::max(mower_front_x + 0.05, min_x);
 
-      // Find lateral center from distribution
-      double min_y = *std::min_element(local_ys.begin(), local_ys.end());
-      double max_y = *std::max_element(local_ys.begin(), local_ys.end());
-      double mean_y = std::accumulate(local_ys.begin(), local_ys.end(), 0.0) / local_ys.size();
+      // Depth-gate points to only include samples belonging to the obstacle front (within 35cm of min_x).
+      // This prevents distant background reflections (e.g. at 1.0m-1.5m on the clear side) from pulling
+      // y_local to the center or skewing the PCA line fit!
+      std::vector<double> obs_xs, obs_ys;
+      for (size_t i = 0; i < local_xs.size(); i++) {
+        if (local_xs[i] <= min_x + 0.35) {
+          obs_xs.push_back(local_xs[i]);
+          obs_ys.push_back(local_ys[i]);
+        }
+      }
+      if (obs_xs.size() < 2) {
+        obs_xs = local_xs;
+        obs_ys = local_ys;
+      }
+
+      // Find lateral center from obstacle cluster
+      double min_y = *std::min_element(obs_ys.begin(), obs_ys.end());
+      double max_y = *std::max_element(obs_ys.begin(), obs_ys.end());
+      double mean_y = std::accumulate(obs_ys.begin(), obs_ys.end(), 0.0) / obs_ys.size();
       y_local = 0.5 * (min_y + max_y) * 0.5 + 0.5 * mean_y;  // Robust blend of midpoint and mean
 
       // 2. Line Fit (PCA / Total Least Squares) in map frame to get accurate surface tilt
       double sum_mx = 0.0, sum_my = 0.0;
-      for (size_t i = 0; i < local_xs.size(); i++) {
-        double mx = rx + local_xs[i] * cos(initial_yaw) - local_ys[i] * sin(initial_yaw);
-        double my = ry + local_xs[i] * sin(initial_yaw) + local_ys[i] * cos(initial_yaw);
+      for (size_t i = 0; i < obs_xs.size(); i++) {
+        double mx = rx + obs_xs[i] * cos(initial_yaw) - obs_ys[i] * sin(initial_yaw);
+        double my = ry + obs_xs[i] * sin(initial_yaw) + obs_ys[i] * cos(initial_yaw);
         sum_mx += mx;
         sum_my += my;
       }
-      double mean_mx = sum_mx / local_xs.size();
-      double mean_my = sum_my / local_xs.size();
+      double mean_mx = sum_mx / obs_xs.size();
+      double mean_my = sum_my / obs_xs.size();
 
       double Sxx = 0.0, Syy = 0.0, Sxy = 0.0;
-      for (size_t i = 0; i < local_xs.size(); i++) {
-        double mx = rx + local_xs[i] * cos(initial_yaw) - local_ys[i] * sin(initial_yaw);
-        double my = ry + local_xs[i] * sin(initial_yaw) + local_ys[i] * cos(initial_yaw);
+      for (size_t i = 0; i < obs_xs.size(); i++) {
+        double mx = rx + obs_xs[i] * cos(initial_yaw) - obs_ys[i] * sin(initial_yaw);
+        double my = ry + obs_xs[i] * sin(initial_yaw) + obs_ys[i] * cos(initial_yaw);
         double dx = mx - mean_mx;
         double dy = my - mean_my;
         Sxx += dx * dx;
@@ -963,6 +978,7 @@ bool MowingBehavior::execute_mowing_plan() {
     double dist_to_start = std::hypot(current_rx - target_start_pt.x, current_ry - target_start_pt.y);
 
     if (dist_to_start > 0.35 || just_avoided_obstacle) {
+      bool is_obstacle_detour = just_avoided_obstacle;
       if (just_avoided_obstacle) {
         ROS_INFO_STREAM("MowingBehavior: (FIRST POINT) Detouring around newly placed dynamic obstacle (dist="
                         << dist_to_start << "m)");
@@ -976,6 +992,12 @@ bool MowingBehavior::execute_mowing_plan() {
         set_nav_point_srv.request.nav_pose = path.path.poses[currentMowingPathIndex].pose;
         setNavPointClient.call(set_nav_point_srv);
         sleep(1);
+      }
+
+      if (is_obstacle_detour && getConfig().mow_during_obstacle_detour) {
+        ROS_INFO_STREAM("MowingBehavior: (FIRST POINT) Keeping mower motor enabled to mow detour around obstacle.");
+        mowerEnabled = true;
+        wait_for_mower_spinup();
       }
 
       mbf_msgs::MoveBaseGoal moveBaseGoal;
@@ -1032,6 +1054,7 @@ bool MowingBehavior::execute_mowing_plan() {
 
       first_point_attempt_counter++;
       if (current_status.state_ != actionlib::SimpleClientGoalState::SUCCEEDED) {
+        mowerEnabled = false;
         // we cannot reach the start point
         ROS_ERROR_STREAM("MowingBehavior: (FIRST POINT) - Could not reach goal (first point). Planner Status was: "
                          << current_status.state_);
