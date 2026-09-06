@@ -89,8 +89,8 @@ actionlib::SimpleActionClient<mbf_msgs::MoveBaseAction>* mbfClient;
 actionlib::SimpleActionClient<mbf_msgs::ExePathAction>* mbfClientExePath;
 actionlib::SimpleActionClient<mbf_msgs::RecoveryAction>* mbfClientRecovery;
 
-ros::Publisher cmd_vel_pub, high_level_state_publisher, mqtt_publish_pub, audio_tts_pub, add_dynamic_obstacle_pub,
-    clear_dynamic_obstacles_pub;
+ros::Publisher cmd_vel_pub, nav_vel_pub, high_level_state_publisher, mqtt_publish_pub, audio_tts_pub,
+    add_dynamic_obstacle_pub, clear_dynamic_obstacles_pub;
 mower_logic::MowerLogicConfig last_config;
 ll::PowerConfig last_power_config;
 
@@ -265,6 +265,7 @@ void setCmdVel(double linear_x, double angular_z) {
   twist.linear.x = linear_x;
   twist.angular.z = angular_z;
   cmd_vel_pub.publish(twist);
+  nav_vel_pub.publish(twist);
 }
 
 void broadcastAudioMessage(const std::string& message) {
@@ -760,6 +761,7 @@ int main(int argc, char** argv) {
   last_power_config.__fromServer__(powerNodeHandle);
 
   cmd_vel_pub = n->advertise<geometry_msgs::Twist>("/logic_vel", 1);
+  nav_vel_pub = n->advertise<geometry_msgs::Twist>("/nav_vel", 1);
 
   high_level_state_publisher = n->advertise<mower_msgs::HighLevelStatus>("mower_logic/current_state", 100, true);
   mqtt_publish_pub = n->advertise<xbot_mqtt::MqttPublish>("/xbot_monitoring/mqtt_publish", 10);
