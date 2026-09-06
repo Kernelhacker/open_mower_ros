@@ -344,7 +344,7 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     if (us_left_state_subscriber.hasMessage()) {
       auto msg = us_left_state_subscriber.getMessage();
       double age = (t_sample - us_left_state_subscriber.getMessageTime()).toSec();
-      if (age < 0.5 && msg.range >= msg.min_range && msg.range < max_scan_range && !std::isnan(msg.range) &&
+      if (age < 0.5 && msg.range > 0.02 && msg.range < max_scan_range && !std::isnan(msg.range) &&
           !std::isinf(msg.range)) {
         double lx = us_left_x + msg.range * std::cos(us_left_yaw);
         double ly = us_left_y + msg.range * std::sin(us_left_yaw);
@@ -356,7 +356,7 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     if (us_right_state_subscriber.hasMessage()) {
       auto msg = us_right_state_subscriber.getMessage();
       double age = (t_sample - us_right_state_subscriber.getMessageTime()).toSec();
-      if (age < 0.5 && msg.range >= msg.min_range && msg.range < max_scan_range && !std::isnan(msg.range) &&
+      if (age < 0.5 && msg.range > 0.02 && msg.range < max_scan_range && !std::isnan(msg.range) &&
           !std::isinf(msg.range)) {
         double lx = us_right_x + msg.range * std::cos(us_right_yaw);
         double ly = us_right_y + msg.range * std::sin(us_right_yaw);
@@ -374,7 +374,7 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     ROS_INFO_STREAM("MowingBehavior: Starting active ultrasonic pan scan (+/- " << config.obstacle_pan_angle_deg
                                                                                 << " deg)...");
     double pan_rad = config.obstacle_pan_angle_deg * (M_PI / 180.0);
-    double pan_speed = std::max(0.1, std::min(0.8, config.obstacle_pan_speed));
+    double pan_speed = std::max(0.8, std::min(2.5, config.obstacle_pan_speed));
 
     enum PanPhase { PAN_LEFT, PAN_RIGHT, RETURN_CENTER, WAIT_REMAINDER, PAN_DONE };
     PanPhase phase = PAN_LEFT;
@@ -406,6 +406,7 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
           if (angle_diff < pan_rad) {
             setCmdVel(0.0, pan_speed);
           } else {
+            setCmdVel(0.0, 0.0);
             phase = PAN_RIGHT;
           }
           break;
@@ -414,12 +415,13 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
           if (angle_diff > -pan_rad) {
             setCmdVel(0.0, -pan_speed);
           } else {
+            setCmdVel(0.0, 0.0);
             phase = RETURN_CENTER;
           }
           break;
 
         case RETURN_CENTER:
-          if (std::abs(angle_diff) > 0.03) {
+          if (std::abs(angle_diff) > 0.05) {
             setCmdVel(0.0, (angle_diff < 0) ? pan_speed : -pan_speed);
           } else {
             setCmdVel(0.0, 0.0);
@@ -545,7 +547,7 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     if (us_left_state_subscriber.hasMessage()) {
       auto msg = us_left_state_subscriber.getMessage();
       double age = (now - us_left_state_subscriber.getMessageTime()).toSec();
-      if (age < 2.0 && msg.range >= msg.min_range && msg.range < max_scan_range && !std::isnan(msg.range) &&
+      if (age < 2.0 && msg.range > 0.02 && msg.range < max_scan_range && !std::isnan(msg.range) &&
           !std::isinf(msg.range)) {
         left_range = msg.range;
         left_detected = true;
@@ -555,11 +557,18 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     if (us_right_state_subscriber.hasMessage()) {
       auto msg = us_right_state_subscriber.getMessage();
       double age = (now - us_right_state_subscriber.getMessageTime()).toSec();
-      if (age < 2.0 && msg.range >= msg.min_range && msg.range < max_scan_range && !std::isnan(msg.range) &&
+      if (age < 2.0 && msg.range > 0.02 && msg.range < max_scan_range && !std::isnan(msg.range) &&
           !std::isinf(msg.range)) {
         right_range = msg.range;
         right_detected = true;
       }
+    }
+
+    if (!left_detected && !right_detected) {
+      ROS_INFO_STREAM(
+          "MowingBehavior: No obstacle confirmed in front during stationary check (transient reflection). "
+          "Resuming path without adding obstacle.");
+      return false;
     }
 
     if (left_detected && right_detected) {
@@ -590,9 +599,6 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
       double obs_y_r = us_right_y + right_range * std::sin(us_right_yaw);
       x_front_edge = std::max(mower_front_x + 0.05, obs_x_r);
       y_local = obs_y_r;
-    } else {
-      x_front_edge = mower_front_x + 0.15;
-      y_local = 0.0;
     }
   }
 
@@ -746,7 +752,8 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
 
     // Publish temporary obstacle to mower_map_service so global_costmap marks it as occupied
     add_dynamic_obstacle_pub.publish(obs_poly);
-    ros::Duration(0.15).sleep();
+    just_avoided_obstacle = true;
+    ros::Duration(1.0).sleep();
 
     ROS_WARN_STREAM("MowingBehavior: Added temporary no-mow zone at (" << obs_x << ", " << obs_y << ") with radius "
                                                                        << r << "m to costmap. Slicing current path.");
@@ -945,9 +952,15 @@ bool MowingBehavior::execute_mowing_plan() {
     const auto& target_start_pt = path.path.poses[currentMowingPathIndex].pose.position;
     double dist_to_start = std::hypot(current_rx - target_start_pt.x, current_ry - target_start_pt.y);
 
-    if (dist_to_start > 0.35) {
-      ROS_INFO_STREAM("MowingBehavior: (FIRST POINT)  Moving to path segment starting point (dist=" << dist_to_start
-                                                                                                    << "m)");
+    if (dist_to_start > 0.35 || just_avoided_obstacle) {
+      if (just_avoided_obstacle) {
+        ROS_INFO_STREAM("MowingBehavior: (FIRST POINT) Detouring around newly placed dynamic obstacle (dist="
+                        << dist_to_start << "m)");
+        just_avoided_obstacle = false;
+      } else {
+        ROS_INFO_STREAM("MowingBehavior: (FIRST POINT)  Moving to path segment starting point (dist=" << dist_to_start
+                                                                                                      << "m)");
+      }
       if (path.is_outline && getConfig().add_fake_obstacle) {
         mower_map::SetNavPointSrv set_nav_point_srv;
         set_nav_point_srv.request.nav_pose = path.path.poses[currentMowingPathIndex].pose;
@@ -1146,7 +1159,7 @@ bool MowingBehavior::execute_mowing_plan() {
               if (us_left_state_subscriber.hasMessage()) {
                 auto msg = us_left_state_subscriber.getMessage();
                 double age = (now - us_left_state_subscriber.getMessageTime()).toSec();
-                if (age < 0.3 && msg.range >= msg.min_range && msg.range < detect_dist && !std::isnan(msg.range) &&
+                if (age < 0.3 && msg.range > 0.02 && msg.range < detect_dist && !std::isnan(msg.range) &&
                     !std::isinf(msg.range)) {
                   us_detected = true;
                 }
@@ -1155,7 +1168,7 @@ bool MowingBehavior::execute_mowing_plan() {
               if (us_right_state_subscriber.hasMessage()) {
                 auto msg = us_right_state_subscriber.getMessage();
                 double age = (now - us_right_state_subscriber.getMessageTime()).toSec();
-                if (age < 0.3 && msg.range >= msg.min_range && msg.range < detect_dist && !std::isnan(msg.range) &&
+                if (age < 0.3 && msg.range > 0.02 && msg.range < detect_dist && !std::isnan(msg.range) &&
                     !std::isinf(msg.range)) {
                   us_detected = true;
                 }
@@ -1163,7 +1176,7 @@ bool MowingBehavior::execute_mowing_plan() {
 
               if (us_detected) {
                 consecutive_obstacle_detections++;
-                if (consecutive_obstacle_detections >= 2) {
+                if (consecutive_obstacle_detections >= 4) {
                   ROS_WARN_STREAM("MowingBehavior: (MOW) Obstacle detected ahead by ultrasonic sensors within "
                                   << detect_dist << "m! Stopping path execution to initiate obstacle avoidance.");
                   mbfClientExePath->cancelAllGoals();

@@ -39,6 +39,7 @@ class MowingBehavior : public Behavior {
 
   // Progress
   bool mowerEnabled = false;
+  bool just_avoided_obstacle = false;
   std::vector<slic3r_coverage_planner::Path> currentMowingPaths;
   std::vector<geometry_msgs::Polygon> temporary_obstacles;
 
