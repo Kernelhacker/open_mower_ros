@@ -16,6 +16,7 @@
 
 #include <mower_msgs/Power.h>
 
+#include "MowingBehavior.h"
 #include "PerimeterDocking.h"
 #include "mower_logic/utils.h"
 
@@ -24,6 +25,8 @@ extern actionlib::SimpleActionClient<mbf_msgs::MoveBaseAction>* mbfClient;
 extern actionlib::SimpleActionClient<mbf_msgs::ExePathAction>* mbfClientExePath;
 extern mower_msgs::Status getStatus();
 extern mower_msgs::Power getPower();
+extern xbot_msgs::AbsolutePose getPose();
+extern mower_logic::MowerLogicConfig getConfig();
 
 extern void stopMoving();
 extern bool setGPS(bool enabled);
@@ -61,8 +64,63 @@ bool DockingBehavior::approach_docking_point() {
     moveBaseGoal.target_pose = docking_approach_point;
     moveBaseGoal.controller = "FTCPlanner";
 
-    auto result = sendGoalAndWaitUnlessAborted(mbfClient, moveBaseGoal);
-    if (aborted || result.state_ != result.SUCCEEDED) {
+    mbfClient->sendGoal(moveBaseGoal);
+    actionlib::SimpleClientGoalState current_status(actionlib::SimpleClientGoalState::PENDING);
+    ros::Rate r(10);
+    int consecutive_obstacle_detections = 0;
+
+    while (ros::ok()) {
+      current_status = mbfClient->getState();
+      if (aborted) {
+        mbfClient->cancelGoal();
+        stopMoving();
+        return false;
+      }
+      if (current_status.state_ == actionlib::SimpleClientGoalState::ACTIVE ||
+          current_status.state_ == actionlib::SimpleClientGoalState::PENDING) {
+        auto current_cfg = getConfig();
+        if (current_cfg.dynamic_obstacle_avoidance) {
+          auto cur_pose_msg = getPose();
+          double rx = cur_pose_msg.pose.pose.position.x;
+          double ry = cur_pose_msg.pose.pose.position.y;
+          tf2::Quaternion q;
+          tf2::fromMsg(cur_pose_msg.pose.pose.orientation, q);
+          double r_roll, r_pitch, cur_yaw;
+          tf2::Matrix3x3(q).getRPY(r_roll, r_pitch, cur_yaw);
+
+          double min_obstacle_dist = 999.0;
+          if (MowingBehavior::check_driving_obstacle(current_cfg, rx, ry, cur_yaw,
+                                                    consecutive_obstacle_detections, min_obstacle_dist,
+                                                    nullptr, &docking_pose_stamped.pose)) {
+            ROS_WARN_STREAM("DockingBehavior: Obstacle detected ahead by ultrasonic sensors within "
+                            << min_obstacle_dist << "m! Stopping to initiate obstacle avoidance.");
+            mbfClient->cancelGoal();
+            stopMoving();
+
+            geometry_msgs::Polygon obs_poly;
+            if (MowingBehavior::scan_and_register_obstacle(current_cfg, aborted, requested_pause_flag, rx, ry, cur_yaw,
+                                                           obs_poly, nullptr, &docking_pose_stamped.pose)) {
+              ROS_INFO_STREAM("DockingBehavior: Added dynamic obstacle to map. Replanning path to docking approach point.");
+            } else {
+              ROS_INFO_STREAM("DockingBehavior: Obstacle cleared or near dock. Resuming approach.");
+            }
+            consecutive_obstacle_detections = 0;
+
+            if (aborted) {
+              return false;
+            }
+            // Re-send MoveBase goal: MoveBase will automatically calculate a path avoiding the obstacle
+            mbfClient->sendGoal(moveBaseGoal);
+            sleep(1);
+          }
+        }
+      } else {
+        break;
+      }
+      r.sleep();
+    }
+
+    if (aborted || current_status.state_ != actionlib::SimpleClientGoalState::SUCCEEDED) {
       return false;
     }
   }

@@ -86,6 +86,7 @@ mower_logic:
   obstacle_detection_distance: 0.60
   obstacle_grace_time: 5.0
   obstacle_exclusion_radius: 0.30
+  docking_obstacle_exclusion_distance: 1.0 # Distance in meters from docking station where obstacle detection is disabled to avoid detecting the dock
   enable_obstacle_pan_scan: true
   obstacle_pan_angle_deg: 15.0
   obstacle_pan_speed: 1.2
