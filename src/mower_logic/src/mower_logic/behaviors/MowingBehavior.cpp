@@ -53,6 +53,7 @@ extern StateSubscriber<sensor_msgs::Range> us_left_state_subscriber;
 extern StateSubscriber<sensor_msgs::Range> us_right_state_subscriber;
 
 extern xbot_msgs::AbsolutePose getPose();
+extern void stopMoving();
 
 extern actionlib::SimpleActionClient<mbf_msgs::MoveBaseAction>* mbfClient;
 extern actionlib::SimpleActionClient<mbf_msgs::ExePathAction>* mbfClientExePath;
