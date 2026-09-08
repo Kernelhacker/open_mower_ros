@@ -89,9 +89,8 @@ bool DockingBehavior::approach_docking_point() {
           tf2::Matrix3x3(q).getRPY(r_roll, r_pitch, cur_yaw);
 
           double min_obstacle_dist = 999.0;
-          if (MowingBehavior::check_driving_obstacle(current_cfg, rx, ry, cur_yaw,
-                                                    consecutive_obstacle_detections, min_obstacle_dist,
-                                                    nullptr, &docking_pose_stamped.pose)) {
+          if (MowingBehavior::check_driving_obstacle(current_cfg, rx, ry, cur_yaw, consecutive_obstacle_detections,
+                                                     min_obstacle_dist, nullptr, &docking_pose_stamped.pose)) {
             ROS_WARN_STREAM("DockingBehavior: Obstacle detected ahead by ultrasonic sensors within "
                             << min_obstacle_dist << "m! Stopping to initiate obstacle avoidance.");
             mbfClient->cancelGoal();
@@ -100,7 +99,8 @@ bool DockingBehavior::approach_docking_point() {
             geometry_msgs::Polygon obs_poly;
             if (MowingBehavior::scan_and_register_obstacle(current_cfg, aborted, requested_pause_flag, rx, ry, cur_yaw,
                                                            obs_poly, nullptr, &docking_pose_stamped.pose)) {
-              ROS_INFO_STREAM("DockingBehavior: Added dynamic obstacle to map. Replanning path to docking approach point.");
+              ROS_INFO_STREAM(
+                  "DockingBehavior: Added dynamic obstacle to map. Replanning path to docking approach point.");
             } else {
               ROS_INFO_STREAM("DockingBehavior: Obstacle cleared or near dock. Resuming approach.");
             }
