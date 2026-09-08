@@ -61,13 +61,15 @@ class MowingBehavior : public Behavior {
   static bool check_driving_obstacle(const mower_logic::MowerLogicConfig& config, double rx, double ry, double cur_yaw,
                                      int& consecutive_detections, double& min_obstacle_dist,
                                      const geometry_msgs::Polygon* area_outline = nullptr,
-                                     const geometry_msgs::Pose* dock_pose = nullptr);
+                                     const geometry_msgs::Pose* dock_pose = nullptr,
+                                     const std::vector<geometry_msgs::Polygon>* known_obstacles = nullptr);
 
   static bool scan_and_register_obstacle(const mower_logic::MowerLogicConfig& config, std::atomic<bool>& aborted_flag,
                                          std::atomic<uint8_t>& pause_flag, double rx, double ry, double initial_yaw,
                                          geometry_msgs::Polygon& out_poly,
                                          const geometry_msgs::Polygon* area_outline = nullptr,
-                                         const geometry_msgs::Pose* dock_pose = nullptr);
+                                         const geometry_msgs::Pose* dock_pose = nullptr,
+                                         const std::vector<geometry_msgs::Polygon>* known_obstacles = nullptr);
 
   std::string state_name() override;
 
