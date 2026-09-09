@@ -62,7 +62,8 @@ class MowingBehavior : public Behavior {
                                      int& consecutive_detections, double& min_obstacle_dist,
                                      const geometry_msgs::Polygon* area_outline = nullptr,
                                      const geometry_msgs::Pose* dock_pose = nullptr,
-                                     const std::vector<geometry_msgs::Polygon>* known_obstacles = nullptr);
+                                     const std::vector<geometry_msgs::Polygon>* known_obstacles = nullptr,
+                                     bool is_detouring = false);
 
   static bool scan_and_register_obstacle(const mower_logic::MowerLogicConfig& config, std::atomic<bool>& aborted_flag,
                                          std::atomic<uint8_t>& pause_flag, double rx, double ry, double initial_yaw,
@@ -70,6 +71,8 @@ class MowingBehavior : public Behavior {
                                          const geometry_msgs::Polygon* area_outline = nullptr,
                                          const geometry_msgs::Pose* dock_pose = nullptr,
                                          const std::vector<geometry_msgs::Polygon>* known_obstacles = nullptr);
+
+  void clear_temporary_obstacles();
 
   std::string state_name() override;
 
