@@ -30,7 +30,7 @@ class MowingBehavior : public Behavior {
   bool skip_area;
   bool skip_path;
   bool create_mowing_plan(int area_index);
-  bool handle_obstacle_and_replan(double lookahead_dist = 0.5);
+  bool handle_obstacle_and_replan(double lookahead_dist = 0.5, double detected_dist = 999.0);
 
   bool execute_mowing_plan();
 
@@ -40,6 +40,7 @@ class MowingBehavior : public Behavior {
   // Progress
   bool mowerEnabled = false;
   bool just_avoided_obstacle = false;
+  double last_detected_obstacle_dist = 999.0;
   std::vector<slic3r_coverage_planner::Path> currentMowingPaths;
   std::vector<geometry_msgs::Polygon> temporary_obstacles;
 
@@ -70,7 +71,8 @@ class MowingBehavior : public Behavior {
                                          geometry_msgs::Polygon& out_poly,
                                          const geometry_msgs::Polygon* area_outline = nullptr,
                                          const geometry_msgs::Pose* dock_pose = nullptr,
-                                         const std::vector<geometry_msgs::Polygon>* known_obstacles = nullptr);
+                                         const std::vector<geometry_msgs::Polygon>* known_obstacles = nullptr,
+                                         double detected_dist = 999.0);
 
   void clear_temporary_obstacles();
 

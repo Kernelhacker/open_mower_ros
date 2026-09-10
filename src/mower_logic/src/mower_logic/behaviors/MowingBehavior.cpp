@@ -360,7 +360,7 @@ bool MowingBehavior::check_driving_obstacle(const mower_logic::MowerLogicConfig&
   if (us_left_state_subscriber.hasMessage()) {
     auto msg = us_left_state_subscriber.getMessage();
     double age = (now - us_left_state_subscriber.getMessageTime()).toSec();
-    if (age < 0.6 && msg.range > 0.05 && msg.range < detect_dist && !std::isnan(msg.range) && !std::isinf(msg.range)) {
+    if (age < 0.6 && msg.range >= 0.15 && msg.range < detect_dist && !std::isnan(msg.range) && !std::isinf(msg.range)) {
       double lx = us_left_x + msg.range * std::cos(us_left_yaw);
       double ly = us_left_y + msg.range * std::sin(us_left_yaw);
       double mx = rx + lx * std::cos(cur_yaw) - ly * std::sin(cur_yaw);
@@ -406,7 +406,7 @@ bool MowingBehavior::check_driving_obstacle(const mower_logic::MowerLogicConfig&
   if (us_right_state_subscriber.hasMessage()) {
     auto msg = us_right_state_subscriber.getMessage();
     double age = (now - us_right_state_subscriber.getMessageTime()).toSec();
-    if (age < 0.6 && msg.range > 0.05 && msg.range < detect_dist && !std::isnan(msg.range) && !std::isinf(msg.range)) {
+    if (age < 0.6 && msg.range >= 0.15 && msg.range < detect_dist && !std::isnan(msg.range) && !std::isinf(msg.range)) {
       double lx = us_right_x + msg.range * std::cos(us_right_yaw);
       double ly = us_right_y + msg.range * std::sin(us_right_yaw);
       double mx = rx + lx * std::cos(cur_yaw) - ly * std::sin(cur_yaw);
@@ -453,36 +453,31 @@ bool MowingBehavior::check_driving_obstacle(const mower_logic::MowerLogicConfig&
   if (any_detected) {
     consecutive_detections++;
     bool trigger_stop = false;
-    if (min_obstacle_dist <= 0.28 && consecutive_detections >= 1) {
-      // Danger zone: Obstacle within 2-4 cm of front bumper! Stop immediately to prevent physical bumper collision!
+    if (min_obstacle_dist <= 0.28 && consecutive_detections >= 2) {
+      // Danger zone: Obstacle within 2-4 cm of front bumper! Stop within 200 ms!
       trigger_stop = true;
-    } else if (min_obstacle_dist <= 0.34 && consecutive_detections >= 2) {
+    } else if (min_obstacle_dist <= 0.35 && consecutive_detections >= 2) {
       // Very close: Obstacle within ~10 cm of front bumper! Stop within 200 ms!
       trigger_stop = true;
     } else if ((left_detected && right_detected) && consecutive_detections >= 3) {
       // Both sensors confirm obstacle ahead
       trigger_stop = true;
-    } else if (consecutive_detections >= 5) {
-      // Sustained single-sensor detection (500 ms) - eliminates transient 1-2 frame grass reflections
+    } else if (consecutive_detections >= 4) {
+      // Sustained single-sensor detection (400 ms) - eliminates transient 1-2 frame grass reflections
       trigger_stop = true;
     }
     return trigger_stop;
   } else {
-    // Single missed sample decays rather than immediately resetting to 0
-    if (consecutive_detections > 0) {
-      consecutive_detections--;
-    }
+    consecutive_detections = 0;
   }
   return false;
 }
 
-bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicConfig& config,
-                                                std::atomic<bool>& aborted_flag, std::atomic<uint8_t>& pause_flag,
-                                                double initial_rx, double initial_ry, double initial_yaw,
-                                                geometry_msgs::Polygon& out_poly,
-                                                const geometry_msgs::Polygon* area_outline,
-                                                const geometry_msgs::Pose* dock_pose,
-                                                const std::vector<geometry_msgs::Polygon>* known_obstacles) {
+bool MowingBehavior::scan_and_register_obstacle(
+    const mower_logic::MowerLogicConfig& config, std::atomic<bool>& aborted_flag, std::atomic<uint8_t>& pause_flag,
+    double initial_rx, double initial_ry, double initial_yaw, geometry_msgs::Polygon& out_poly,
+    const geometry_msgs::Polygon* area_outline, const geometry_msgs::Pose* dock_pose,
+    const std::vector<geometry_msgs::Polygon>* known_obstacles, double detected_dist) {
   double dock_exclusion_dist = std::max(config.docking_obstacle_exclusion_distance, config.docking_approach_distance);
   if (dock_pose) {
     double dist_to_dock = std::hypot(initial_rx - dock_pose->position.x, initial_ry - dock_pose->position.y);
@@ -528,7 +523,7 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
         last_left_scan_time = msg_time;
         auto msg = us_left_state_subscriber.getMessage();
         double age = (t_sample - msg_time).toSec();
-        if (age < 0.6 && msg.range > 0.02 && msg.range < max_scan_range && !std::isnan(msg.range) &&
+        if (age < 0.6 && msg.range >= 0.15 && msg.range < max_scan_range && !std::isnan(msg.range) &&
             !std::isinf(msg.range)) {
           double lx = us_left_x + msg.range * std::cos(us_left_yaw);
           double ly = us_left_y + msg.range * std::sin(us_left_yaw);
@@ -544,7 +539,7 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
         last_right_scan_time = msg_time;
         auto msg = us_right_state_subscriber.getMessage();
         double age = (t_sample - msg_time).toSec();
-        if (age < 0.6 && msg.range > 0.02 && msg.range < max_scan_range && !std::isnan(msg.range) &&
+        if (age < 0.6 && msg.range >= 0.15 && msg.range < max_scan_range && !std::isnan(msg.range) &&
             !std::isinf(msg.range)) {
           double lx = us_right_x + msg.range * std::cos(us_right_yaw);
           double ly = us_right_y + msg.range * std::sin(us_right_yaw);
@@ -559,7 +554,14 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
   ros::Time grace_start = ros::Time::now();
   ros::Rate sweep_rate(40);
 
-  if (config.enable_obstacle_pan_scan) {
+  bool should_pan = config.enable_obstacle_pan_scan && (detected_dist > 0.35);
+  if (config.enable_obstacle_pan_scan && !should_pan) {
+    ROS_INFO_STREAM("Close obstacle detected ("
+                    << detected_dist
+                    << "m <= 0.35m). Using stationary verification instead of pan scan to prevent bumper collision.");
+  }
+
+  if (should_pan) {
     ROS_INFO_STREAM("Starting active ultrasonic pan scan (+/- " << config.obstacle_pan_angle_deg << " deg)...");
     double pan_rad = config.obstacle_pan_angle_deg * (M_PI / 180.0);
     double pan_speed = std::max(1.0, std::min(2.5, config.obstacle_pan_speed));
@@ -608,7 +610,8 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
 
         case RETURN_CENTER:
           if (std::abs(angle_diff) > 0.05) {
-            setCmdVel(0.0, (angle_diff < 0) ? pan_speed : -pan_speed);
+            double rot = std::max(0.3, std::min(pan_speed, std::abs(angle_diff) * 2.5));
+            setCmdVel(0.0, (angle_diff < 0) ? rot : -rot);
           } else {
             setCmdVel(0.0, 0.0);
             phase = WAIT_REMAINDER;
@@ -634,7 +637,7 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
   double obs_heading = initial_yaw;
   bool scan_success = false;
 
-  if (config.enable_obstacle_pan_scan) {
+  if (should_pan) {
     std::vector<double> local_xs, local_ys;
     double max_local_x = mower_front_x + config.obstacle_detection_distance + 0.15;
     for (const auto& pt : scan_points) {
@@ -648,8 +651,7 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
       }
     }
 
-    // Require at least 12 sonar points gathered during the pan scan (empirical grass noise had <= 10 points)
-    if (local_xs.size() >= 12) {
+    if (local_xs.size() >= 2) {
       double min_x = *std::min_element(local_xs.begin(), local_xs.end());
       x_front_edge = std::max(mower_front_x + 0.05, min_x);
 
@@ -662,65 +664,69 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
         }
       }
 
-      // Require a dense cluster of at least 8 points forming the obstacle surface
-      if (obs_xs.size() >= 8) {
+      if (obs_xs.size() >= 2) {
         double min_y = *std::min_element(obs_ys.begin(), obs_ys.end());
         double max_y = *std::max_element(obs_ys.begin(), obs_ys.end());
         double mean_y = std::accumulate(obs_ys.begin(), obs_ys.end(), 0.0) / obs_ys.size();
         y_local = 0.5 * (min_y + max_y) * 0.5 + 0.5 * mean_y;
 
-        double sum_mx = 0.0, sum_my = 0.0;
-        for (size_t i = 0; i < obs_xs.size(); i++) {
-          double mx = initial_rx + obs_xs[i] * cos(initial_yaw) - obs_ys[i] * sin(initial_yaw);
-          double my = initial_ry + obs_xs[i] * sin(initial_yaw) + obs_ys[i] * cos(initial_yaw);
-          sum_mx += mx;
-          sum_my += my;
+        if (obs_xs.size() >= 4) {
+          double sum_mx = 0.0, sum_my = 0.0;
+          for (size_t i = 0; i < obs_xs.size(); i++) {
+            double mx = initial_rx + obs_xs[i] * cos(initial_yaw) - obs_ys[i] * sin(initial_yaw);
+            double my = initial_ry + obs_xs[i] * sin(initial_yaw) + obs_ys[i] * cos(initial_yaw);
+            sum_mx += mx;
+            sum_my += my;
+          }
+          double mean_mx = sum_mx / obs_xs.size();
+          double mean_my = sum_my / obs_xs.size();
+
+          double Sxx = 0.0, Syy = 0.0, Sxy = 0.0;
+          for (size_t i = 0; i < obs_xs.size(); i++) {
+            double mx = initial_rx + obs_xs[i] * cos(initial_yaw) - obs_ys[i] * sin(initial_yaw);
+            double my = initial_ry + obs_xs[i] * sin(initial_yaw) + obs_ys[i] * cos(initial_yaw);
+            double dx = mx - mean_mx;
+            double dy = my - mean_my;
+            Sxx += dx * dx;
+            Syy += dy * dy;
+            Sxy += dx * dy;
+          }
+
+          double tangent_angle = 0.5 * std::atan2(2.0 * Sxy, Sxx - Syy);
+          double norm1 = tangent_angle + M_PI / 2.0;
+          double norm2 = tangent_angle - M_PI / 2.0;
+
+          auto angle_diff_fn = [](double a, double b) {
+            double d = a - b;
+            while (d > M_PI) d -= 2.0 * M_PI;
+            while (d < -M_PI) d += 2.0 * M_PI;
+            return std::abs(d);
+          };
+
+          double fitted_normal =
+              (angle_diff_fn(norm1, initial_yaw) < angle_diff_fn(norm2, initial_yaw)) ? norm1 : norm2;
+          double delta_tilt = fitted_normal - initial_yaw;
+          while (delta_tilt > M_PI) delta_tilt -= 2.0 * M_PI;
+          while (delta_tilt < -M_PI) delta_tilt += 2.0 * M_PI;
+          delta_tilt = std::max(-M_PI / 6.0, std::min(M_PI / 6.0, delta_tilt));  // Clamp to +/- 30 deg
+
+          obs_heading = initial_yaw + delta_tilt;
+        } else {
+          obs_heading = initial_yaw;
         }
-        double mean_mx = sum_mx / obs_xs.size();
-        double mean_my = sum_my / obs_xs.size();
-
-        double Sxx = 0.0, Syy = 0.0, Sxy = 0.0;
-        for (size_t i = 0; i < obs_xs.size(); i++) {
-          double mx = initial_rx + obs_xs[i] * cos(initial_yaw) - obs_ys[i] * sin(initial_yaw);
-          double my = initial_ry + obs_xs[i] * sin(initial_yaw) + obs_ys[i] * cos(initial_yaw);
-          double dx = mx - mean_mx;
-          double dy = my - mean_my;
-          Sxx += dx * dx;
-          Syy += dy * dy;
-          Sxy += dx * dy;
-        }
-
-        double tangent_angle = 0.5 * std::atan2(2.0 * Sxy, Sxx - Syy);
-        double norm1 = tangent_angle + M_PI / 2.0;
-        double norm2 = tangent_angle - M_PI / 2.0;
-
-        auto angle_diff_fn = [](double a, double b) {
-          double d = a - b;
-          while (d > M_PI) d -= 2.0 * M_PI;
-          while (d < -M_PI) d += 2.0 * M_PI;
-          return std::abs(d);
-        };
-
-        double fitted_normal = (angle_diff_fn(norm1, initial_yaw) < angle_diff_fn(norm2, initial_yaw)) ? norm1 : norm2;
-        double delta_tilt = fitted_normal - initial_yaw;
-        while (delta_tilt > M_PI) delta_tilt -= 2.0 * M_PI;
-        while (delta_tilt < -M_PI) delta_tilt += 2.0 * M_PI;
-        delta_tilt = std::max(-M_PI / 6.0, std::min(M_PI / 6.0, delta_tilt));  // Clamp to +/- 30 deg
-
-        obs_heading = initial_yaw + delta_tilt;
         scan_success = true;
 
-        ROS_INFO_STREAM("Pan scan confirmed obstacle ("
-                        << obs_xs.size() << "/" << local_xs.size() << " sonar points in cluster) -> x_front="
-                        << x_front_edge << "m, y_local=" << y_local << "m, tilt=" << (delta_tilt * 180.0 / M_PI)
-                        << "deg, obs_heading=" << (obs_heading * 180.0 / M_PI) << "deg");
+        ROS_INFO_STREAM("Pan scan confirmed obstacle (" << obs_xs.size() << "/" << local_xs.size()
+                                                        << " sonar points in cluster) -> x_front=" << x_front_edge
+                                                        << "m, y_local=" << y_local
+                                                        << "m, obs_heading=" << (obs_heading * 180.0 / M_PI) << "deg");
       } else {
         ROS_INFO_STREAM("Obstacle NOT confirmed during pan scan: cluster has only "
-                        << obs_xs.size() << " points (< 8). Rejecting as dispersed ground clutter.");
+                        << obs_xs.size() << " points (< 2). Rejecting as dispersed ground clutter.");
       }
     } else {
       ROS_INFO_STREAM("Obstacle NOT confirmed during pan scan: only "
-                      << local_xs.size() << " points gathered (< 12). Rejecting as transient grass/ground reflection.");
+                      << local_xs.size() << " points gathered (< 2). Rejecting as transient grass/ground reflection.");
     }
 
     if (!scan_success) {
@@ -743,9 +749,9 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
         ros::Time msg_time = us_left_state_subscriber.getMessageTime();
         if (msg_time != last_l_time) {
           last_l_time = msg_time;
-          if ((t_now - msg_time).toSec() < 0.4) {
+          if ((t_now - msg_time).toSec() < 0.6) {
             auto msg = us_left_state_subscriber.getMessage();
-            if (msg.range > 0.05 && msg.range < config.obstacle_detection_distance && !std::isnan(msg.range) &&
+            if (msg.range >= 0.15 && msg.range < config.obstacle_detection_distance && !std::isnan(msg.range) &&
                 !std::isinf(msg.range)) {
               left_samples.push_back(msg.range);
             }
@@ -756,9 +762,9 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
         ros::Time msg_time = us_right_state_subscriber.getMessageTime();
         if (msg_time != last_r_time) {
           last_r_time = msg_time;
-          if ((t_now - msg_time).toSec() < 0.4) {
+          if ((t_now - msg_time).toSec() < 0.6) {
             auto msg = us_right_state_subscriber.getMessage();
-            if (msg.range > 0.05 && msg.range < config.obstacle_detection_distance && !std::isnan(msg.range) &&
+            if (msg.range >= 0.15 && msg.range < config.obstacle_detection_distance && !std::isnan(msg.range) &&
                 !std::isinf(msg.range)) {
               right_samples.push_back(msg.range);
             }
@@ -768,23 +774,23 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
       sweep_rate.sleep();
     }
 
-    size_t total_samples = left_samples.size() + right_samples.size();
-    if (total_samples < 8) {
-      ROS_INFO_STREAM("Obstacle NOT confirmed during stationary check: only "
-                      << total_samples << " readings received (< 8). Rejecting as transient reflection.");
-      return false;
-    }
+    auto is_consistent = [](const std::vector<double>& samples) {
+      if (samples.empty()) return false;
+      if (samples.size() == 1) return true;
+      double min_v = *std::min_element(samples.begin(), samples.end());
+      double max_v = *std::max_element(samples.begin(), samples.end());
+      return (max_v - min_v) <= 0.15;
+    };
 
-    bool left_detected = (left_samples.size() >= 4);
-    bool right_detected = (right_samples.size() >= 4);
-    double left_range = left_samples.empty()
-                            ? 999.0
-                            : std::accumulate(left_samples.begin(), left_samples.end(), 0.0) / left_samples.size();
-    double right_range = right_samples.empty()
-                             ? 999.0
-                             : std::accumulate(right_samples.begin(), right_samples.end(), 0.0) / right_samples.size();
+    bool left_valid = (!left_samples.empty() && is_consistent(left_samples));
+    bool right_valid = (!right_samples.empty() && is_consistent(right_samples));
+    bool both_detected = (!left_samples.empty() && !right_samples.empty());
+    bool close_detected = (detected_dist <= 0.35 && (!left_samples.empty() || !right_samples.empty()));
 
-    if (left_detected && right_detected) {
+    if (both_detected && left_valid && right_valid) {
+      double left_range = std::accumulate(left_samples.begin(), left_samples.end(), 0.0) / left_samples.size();
+      double right_range = std::accumulate(right_samples.begin(), right_samples.end(), 0.0) / right_samples.size();
+
       double obs_x_l = us_left_x + left_range * std::cos(us_left_yaw);
       double obs_y_l = us_left_y + left_range * std::sin(us_left_yaw);
       double obs_x_r = us_right_x + right_range * std::cos(us_right_yaw);
@@ -803,26 +809,52 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
       double t = 0.5 - std::max(-0.5, std::min(0.5, diff * 1.5));
       y_local = obs_y_l * (1.0 - t) + obs_y_r * t;
       scan_success = true;
-    } else if (left_detected) {
+    } else if (left_valid && (left_samples.size() >= 2 || close_detected)) {
+      double left_range = std::accumulate(left_samples.begin(), left_samples.end(), 0.0) / left_samples.size();
       double obs_x_l = us_left_x + left_range * std::cos(us_left_yaw);
       double obs_y_l = us_left_y + left_range * std::sin(us_left_yaw);
       x_front_edge = std::max(mower_front_x + 0.05, obs_x_l);
       y_local = obs_y_l;
+      obs_heading = initial_yaw;
       scan_success = true;
-    } else if (right_detected) {
+    } else if (right_valid && (right_samples.size() >= 2 || close_detected)) {
+      double right_range = std::accumulate(right_samples.begin(), right_samples.end(), 0.0) / right_samples.size();
       double obs_x_r = us_right_x + right_range * std::cos(us_right_yaw);
       double obs_y_r = us_right_y + right_range * std::sin(us_right_yaw);
       x_front_edge = std::max(mower_front_x + 0.05, obs_x_r);
       y_local = obs_y_r;
+      obs_heading = initial_yaw;
+      scan_success = true;
+    } else if (close_detected) {
+      // At least one sample at close distance <= 0.35m
+      double range = !left_samples.empty() ? left_samples.back() : right_samples.back();
+      double us_x = !left_samples.empty() ? us_left_x : us_right_x;
+      double us_y = !left_samples.empty() ? us_left_y : us_right_y;
+      x_front_edge = std::max(mower_front_x + 0.05, us_x + range);
+      y_local = us_y;
+      obs_heading = initial_yaw;
+      scan_success = true;
+    } else if (detected_dist <= 0.28) {
+      // Danger zone fallback: Obstacle was detected at <= 0.28m while driving (2 consecutive frames).
+      // Robot stopped right in front of it (within 2-5 cm of bumper).
+      // Sensor echo may be lost due to the < 0.15m dead zone or specular reflection.
+      // NEVER drive forward into it! Force obstacle registration!
+      ROS_WARN_STREAM("Stationary check received no fresh echoes, but obstacle was detected at danger-close range ("
+                      << detected_dist << "m <= 0.28m). Forcing obstacle registration to prevent collision!");
+      x_front_edge = mower_front_x + 0.05;
+      y_local = 0.0;
+      obs_heading = initial_yaw;
       scan_success = true;
     } else {
-      ROS_INFO_STREAM(
-          "Obstacle NOT confirmed during stationary check: neither sensor had sufficient consistent readings. "
-          "Resuming.");
+      ROS_INFO_STREAM("Obstacle NOT confirmed during stationary check: left="
+                      << left_samples.size() << ", right=" << right_samples.size()
+                      << " readings. Rejecting as transient noise.");
       return false;
     }
-    ROS_INFO_STREAM("Stationary check confirmed obstacle: " << total_samples << " readings -> x_front=" << x_front_edge
-                                                            << "m, y_local=" << y_local << "m");
+
+    ROS_INFO_STREAM("Stationary check confirmed obstacle (left="
+                    << left_samples.size() << ", right=" << right_samples.size() << ") -> x_front=" << x_front_edge
+                    << "m, y_local=" << y_local << "m");
   }
 
   double r = config.obstacle_exclusion_radius;
@@ -896,7 +928,7 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
     }
   }
 
-  // Boundary check: If obstacle is outside active mowing area, ignore it
+  // Boundary check: If obstacle is outside active mowing area, ignore it unless in immediate collision range
   if (area_outline && !area_outline->points.empty()) {
     bool in_area = isPointInPolygon(obs_x, obs_y, area_outline->points);
     if (!in_area) {
@@ -908,9 +940,15 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
       }
     }
     if (!in_area) {
-      ROS_WARN_STREAM("Detected obstacle at (" << obs_x << ", " << obs_y
-                                               << ") is outside mowing area boundary. Ignoring.");
-      return false;
+      double dist_front = std::hypot(front_center_x - initial_rx, front_center_y - initial_ry);
+      if (dist_front <= mower_front_x + 0.35) {
+        ROS_WARN_STREAM("Obstacle front edge (" << dist_front << "m) is in front of mower near boundary. "
+                                                << "Registering obstacle to prevent collision!");
+      } else {
+        ROS_WARN_STREAM("Detected obstacle at (" << obs_x << ", " << obs_y
+                                                 << ") is outside mowing area boundary. Ignoring.");
+        return false;
+      }
     }
   }
 
@@ -936,7 +974,7 @@ bool MowingBehavior::scan_and_register_obstacle(const mower_logic::MowerLogicCon
   return true;
 }
 
-bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
+bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist, double detected_dist) {
   auto config = getConfig();
   if (!config.dynamic_obstacle_avoidance) {
     return false;
@@ -960,7 +998,7 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
 
   geometry_msgs::Polygon obs_poly;
   if (!scan_and_register_obstacle(config, aborted, requested_pause_flag, rx, ry, initial_yaw, obs_poly,
-                                  &currentMowingAreaOutline, nullptr, &temporary_obstacles)) {
+                                  &currentMowingAreaOutline, nullptr, &temporary_obstacles, detected_dist)) {
     return false;
   }
 
@@ -1005,6 +1043,10 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
   }
   publishMqtt("temporary_obstacles/json", all_obstacles_json, true);
 
+  double mower_length = config.mower_length > 0.1 ? config.mower_length : 0.46;
+  double mower_axle_from_rear = config.mower_axle_from_rear >= 0.0 ? config.mower_axle_from_rear : 0.10;
+  double mower_front_x = mower_length - mower_axle_from_rear;
+
   // Path Slicing & Obstacle Avoidance:
   // Check if current path is blocked by this obstacle
   if (currentMowingPath >= 0 && currentMowingPath < static_cast<int>(currentMowingPaths.size())) {
@@ -1037,8 +1079,18 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
     }
 
     if (block_start == -1) {
-      ROS_INFO_STREAM("MowingBehavior: Detected obstacle does not intersect current path. Continuing path execution.");
-      return false;
+      double dist_to_robot = std::hypot(obs_x - rx, obs_y - ry);
+      if (dist_to_robot <= r + mower_front_x + 0.35) {
+        ROS_WARN_STREAM("MowingBehavior: Obstacle is directly in front of mower ("
+                        << dist_to_robot << "m <= " << (r + mower_front_x + 0.35)
+                        << "m), forcing path block to prevent collision!");
+        block_start = currentMowingPathIndex;
+        block_end = std::min(static_cast<int>(cur_path.path.poses.size() - 1), currentMowingPathIndex + 3);
+      } else {
+        ROS_INFO_STREAM(
+            "MowingBehavior: Detected obstacle does not intersect current path. Continuing path execution.");
+        return false;
+      }
     }
 
     ROS_INFO_STREAM("MowingBehavior: Slicing path " << currentMowingPath << " around obstacle: blocked poses "
@@ -1055,9 +1107,7 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist) {
                                                                         << " poses behind obstacle.");
     }
 
-    if (block_start > 0) {
-      cur_path.path.poses.resize(block_start);
-    }
+    cur_path.path.poses.resize(block_start);
 
     if (has_remainder && !remainder_path.path.poses.empty()) {
       currentMowingPaths.insert(currentMowingPaths.begin() + currentMowingPath + 1, remainder_path);
@@ -1326,7 +1376,8 @@ bool MowingBehavior::execute_mowing_plan() {
 
               geometry_msgs::Polygon obs_poly;
               if (scan_and_register_obstacle(current_cfg, aborted, requested_pause_flag, rx, ry, cur_yaw, obs_poly,
-                                             &currentMowingAreaOutline, nullptr, &temporary_obstacles)) {
+                                             &currentMowingAreaOutline, nullptr, &temporary_obstacles,
+                                             min_obstacle_dist)) {
                 bool already_in_list = false;
                 double obs_cx = 0, obs_cy = 0;
                 for (const auto& pt : obs_poly.points) {
@@ -1594,6 +1645,7 @@ bool MowingBehavior::execute_mowing_plan() {
                                 << min_obstacle_dist << "m! Stopping path execution to initiate obstacle avoidance.");
                 mbfClientExePath->cancelAllGoals();
                 mowerEnabled = false;
+                last_detected_obstacle_dist = min_obstacle_dist;
                 break;  // Exit path execution loop to trigger handle_obstacle_and_replan
               }
             }
@@ -1632,7 +1684,9 @@ bool MowingBehavior::execute_mowing_plan() {
           if (!requested_pause_flag) {
             auto config = getConfig();
             if (config.dynamic_obstacle_avoidance && (!path.is_outline || config.obstacle_detection_on_outlines)) {
-              if (handle_obstacle_and_replan(0.5)) {
+              double dist = last_detected_obstacle_dist;
+              last_detected_obstacle_dist = 999.0;
+              if (handle_obstacle_and_replan(0.5, dist)) {
                 continue;
               }
               // Obstacle check complete (obstacle was outside area or did not block path).

@@ -98,7 +98,8 @@ bool DockingBehavior::approach_docking_point() {
 
             geometry_msgs::Polygon obs_poly;
             if (MowingBehavior::scan_and_register_obstacle(current_cfg, aborted, requested_pause_flag, rx, ry, cur_yaw,
-                                                           obs_poly, nullptr, &docking_pose_stamped.pose)) {
+                                                           obs_poly, nullptr, &docking_pose_stamped.pose, nullptr,
+                                                           min_obstacle_dist)) {
               ROS_INFO_STREAM(
                   "DockingBehavior: Added dynamic obstacle to map. Replanning path to docking approach point.");
             } else {
