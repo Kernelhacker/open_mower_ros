@@ -394,7 +394,7 @@ bool MowingBehavior::check_driving_obstacle(const mower_logic::MowerLogicConfig&
   if (us_left_state_subscriber.hasMessage()) {
     auto msg = us_left_state_subscriber.getMessage();
     double age = (now - us_left_state_subscriber.getMessageTime()).toSec();
-    if (age < 0.25 && msg.range >= 0.15 && msg.range < detect_dist && !std::isnan(msg.range) &&
+    if (age < 0.60 && msg.range >= 0.15 && msg.range < detect_dist && !std::isnan(msg.range) &&
         !std::isinf(msg.range)) {
       double lx = us_left_x + msg.range * std::cos(us_left_yaw);
       double ly = us_left_y + msg.range * std::sin(us_left_yaw);
@@ -409,9 +409,11 @@ bool MowingBehavior::check_driving_obstacle(const mower_logic::MowerLogicConfig&
         }
       }
 
-      // Check if echo falls in an already known temporary obstacle
+      // Check if echo falls in an already known temporary obstacle ONLY when safely detouring around it.
+      // When mowing normally, or if the obstacle is in the imminent collision zone (<= 0.28m),
+      // we must NEVER ignore an obstacle ahead of the mower!
       bool echo_in_known_obstacle = false;
-      if (known_obstacles) {
+      if (is_detouring && msg.range > 0.28 && known_obstacles) {
         for (const auto& obs_poly : *known_obstacles) {
           if (obs_poly.points.empty()) continue;
           double obs_cx = 0, obs_cy = 0;
@@ -429,7 +431,14 @@ bool MowingBehavior::check_driving_obstacle(const mower_logic::MowerLogicConfig&
       }
 
       if (!echo_near_dock && !echo_in_known_obstacle) {
-        if (!area_outline || area_outline->points.empty() || isPointInPolygon(mx, my, area_outline->points)) {
+        // If the obstacle is within imminent collision range (<= 0.28m), trigger regardless
+        // of area outline: a wall/fence bordering the lawn is a real collision!
+        // Otherwise, verify that the echo is within the mowing area.
+        bool inside_area = true;
+        if (msg.range > 0.28 && area_outline && !area_outline->points.empty()) {
+          inside_area = isPointInPolygon(mx, my, area_outline->points);
+        }
+        if (inside_area) {
           left_detected = true;
           min_obstacle_dist = std::min(min_obstacle_dist, static_cast<double>(msg.range));
         }
@@ -440,7 +449,7 @@ bool MowingBehavior::check_driving_obstacle(const mower_logic::MowerLogicConfig&
   if (us_right_state_subscriber.hasMessage()) {
     auto msg = us_right_state_subscriber.getMessage();
     double age = (now - us_right_state_subscriber.getMessageTime()).toSec();
-    if (age < 0.25 && msg.range >= 0.15 && msg.range < detect_dist && !std::isnan(msg.range) &&
+    if (age < 0.60 && msg.range >= 0.15 && msg.range < detect_dist && !std::isnan(msg.range) &&
         !std::isinf(msg.range)) {
       double lx = us_right_x + msg.range * std::cos(us_right_yaw);
       double ly = us_right_y + msg.range * std::sin(us_right_yaw);
@@ -455,9 +464,11 @@ bool MowingBehavior::check_driving_obstacle(const mower_logic::MowerLogicConfig&
         }
       }
 
-      // Check if echo falls in an already known temporary obstacle
+      // Check if echo falls in an already known temporary obstacle ONLY when safely detouring around it.
+      // When mowing normally, or if the obstacle is in the imminent collision zone (<= 0.28m),
+      // we must NEVER ignore an obstacle ahead of the mower!
       bool echo_in_known_obstacle = false;
-      if (known_obstacles) {
+      if (is_detouring && msg.range > 0.28 && known_obstacles) {
         for (const auto& obs_poly : *known_obstacles) {
           if (obs_poly.points.empty()) continue;
           double obs_cx = 0, obs_cy = 0;
@@ -475,7 +486,14 @@ bool MowingBehavior::check_driving_obstacle(const mower_logic::MowerLogicConfig&
       }
 
       if (!echo_near_dock && !echo_in_known_obstacle) {
-        if (!area_outline || area_outline->points.empty() || isPointInPolygon(mx, my, area_outline->points)) {
+        // If the obstacle is within imminent collision range (<= 0.28m), trigger regardless
+        // of area outline: a wall/fence bordering the lawn is a real collision!
+        // Otherwise, verify that the echo is within the mowing area.
+        bool inside_area = true;
+        if (msg.range > 0.28 && area_outline && !area_outline->points.empty()) {
+          inside_area = isPointInPolygon(mx, my, area_outline->points);
+        }
+        if (inside_area) {
           right_detected = true;
           min_obstacle_dist = std::min(min_obstacle_dist, static_cast<double>(msg.range));
         }
@@ -502,8 +520,13 @@ bool MowingBehavior::check_driving_obstacle(const mower_logic::MowerLogicConfig&
   consecutive_detections = std::max(left_consecutive, right_consecutive);
 
   bool trigger_stop = false;
-  if (min_obstacle_dist <= 0.28 &&
-      (left_consecutive >= 2 || right_consecutive >= 2 || (left_consecutive >= 1 && right_consecutive >= 1))) {
+  // Imminent collision zone: bumper is 0.18m ahead of sensors.
+  // At <= 0.25m range, bumper is <= 7 cm from obstacle!
+  // Stop immediately on a single confirmed reading.
+  if (min_obstacle_dist <= 0.25 && (left_consecutive >= 1 || right_consecutive >= 1)) {
+    trigger_stop = true;
+  } else if (min_obstacle_dist <= 0.28 &&
+             (left_consecutive >= 2 || right_consecutive >= 2 || (left_consecutive >= 1 && right_consecutive >= 1))) {
     trigger_stop = true;
   } else if (min_obstacle_dist <= 0.35 &&
              (left_consecutive >= 3 || right_consecutive >= 3 || (left_consecutive >= 2 && right_consecutive >= 1) ||
@@ -1102,8 +1125,9 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist, double de
     auto& cur_path = currentMowingPaths[currentMowingPath];
     int block_start = -1;
     int block_end = -1;
-    size_t search_limit = std::min(cur_path.path.poses.size(), static_cast<size_t>(currentMowingPathIndex + 40));
+    size_t search_limit = std::min(cur_path.path.poses.size(), static_cast<size_t>(currentMowingPathIndex + 200));
     double r = config.obstacle_exclusion_radius;
+    double clear_dist = r + 0.75;
 
     // Obstacle center approximation from polygon
     double obs_x = 0, obs_y = 0;
@@ -1117,13 +1141,37 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist, double de
     for (size_t i = currentMowingPathIndex; i < search_limit; i++) {
       const auto& pt = cur_path.path.poses[i].pose.position;
       double d_to_obs = std::hypot(pt.x - obs_x, pt.y - obs_y);
-      if (d_to_obs <= r + 0.75) {
+      bool in_obs = (d_to_obs <= clear_dist) || isPointInPolygon(pt.x, pt.y, obs_poly.points);
+      if (!in_obs) {
+        for (const auto& existing : temporary_obstacles) {
+          if (isPointInPolygon(pt.x, pt.y, existing.points)) {
+            in_obs = true;
+            break;
+          }
+        }
+      }
+
+      if (in_obs) {
         if (block_start == -1) {
           block_start = static_cast<int>(i);
         }
         block_end = static_cast<int>(i);
       } else if (block_start != -1) {
-        break;
+        // If we found a clear pose, verify that the path does not immediately re-enter
+        // the obstacle zone within the next 25 poses (e.g. during a turnaround at a wall)
+        bool reenters = false;
+        size_t look_further = std::min(cur_path.path.poses.size(), i + 25);
+        for (size_t k = i + 1; k < look_further; k++) {
+          const auto& k_pt = cur_path.path.poses[k].pose.position;
+          double kd = std::hypot(k_pt.x - obs_x, k_pt.y - obs_y);
+          if (kd <= clear_dist || isPointInPolygon(k_pt.x, k_pt.y, obs_poly.points)) {
+            reenters = true;
+            break;
+          }
+        }
+        if (!reenters) {
+          break;
+        }
       }
     }
 
@@ -1147,13 +1195,37 @@ bool MowingBehavior::handle_obstacle_and_replan(double lookahead_dist, double de
                                                     << cur_path.path.poses.size());
 
     slic3r_coverage_planner::Path remainder_path;
-    bool has_remainder = (block_end + 4 < static_cast<int>(cur_path.path.poses.size()));
-    if (has_remainder) {
-      remainder_path.is_outline = cur_path.is_outline;
-      remainder_path.path.header = cur_path.path.header;
-      remainder_path.path.poses.assign(cur_path.path.poses.begin() + block_end + 3, cur_path.path.poses.end());
-      ROS_INFO_STREAM("MowingBehavior: Created continuation path with " << remainder_path.path.poses.size()
-                                                                        << " poses behind obstacle.");
+    bool has_remainder = false;
+    if (block_end != -1) {
+      // Find the first safe starting point for remainder_path outside all obstacle zones
+      size_t rem_start = block_end + 3;
+      while (rem_start < cur_path.path.poses.size()) {
+        const auto& pt = cur_path.path.poses[rem_start].pose.position;
+        double d_to_obs = std::hypot(pt.x - obs_x, pt.y - obs_y);
+        bool in_zone = (d_to_obs <= clear_dist) || isPointInPolygon(pt.x, pt.y, obs_poly.points);
+        if (!in_zone) {
+          for (const auto& existing : temporary_obstacles) {
+            if (isPointInPolygon(pt.x, pt.y, existing.points)) {
+              in_zone = true;
+              break;
+            }
+          }
+        }
+        if (!in_zone) {
+          break;
+        }
+        rem_start++;
+      }
+
+      if (rem_start < cur_path.path.poses.size()) {
+        has_remainder = true;
+        remainder_path.is_outline = cur_path.is_outline;
+        remainder_path.path.header = cur_path.path.header;
+        remainder_path.path.poses.assign(cur_path.path.poses.begin() + rem_start, cur_path.path.poses.end());
+        ROS_INFO_STREAM("MowingBehavior: Created continuation path with "
+                        << remainder_path.path.poses.size() << " poses behind obstacle (started at pose " << rem_start
+                        << ").");
+      }
     }
 
     cur_path.path.poses.resize(block_start);
@@ -1484,23 +1556,64 @@ bool MowingBehavior::execute_mowing_plan() {
                   int block_start = -1;
                   int block_end = -1;
                   size_t search_limit =
-                      std::min(path.path.poses.size(), static_cast<size_t>(currentMowingPathIndex + 40));
+                      std::min(path.path.poses.size(), static_cast<size_t>(currentMowingPathIndex + 200));
+                  double clear_dist = r + 0.75;
                   for (size_t i = currentMowingPathIndex; i < search_limit; i++) {
                     const auto& pt = path.path.poses[i].pose.position;
                     double d_to_obs = std::hypot(pt.x - obs_x, pt.y - obs_y);
-                    if (d_to_obs <= r + 0.75) {
+                    bool in_obs = (d_to_obs <= clear_dist) || isPointInPolygon(pt.x, pt.y, obs_poly.points);
+                    if (!in_obs) {
+                      for (const auto& existing : temporary_obstacles) {
+                        if (isPointInPolygon(pt.x, pt.y, existing.points)) {
+                          in_obs = true;
+                          break;
+                        }
+                      }
+                    }
+                    if (in_obs) {
                       if (block_start == -1) {
                         block_start = static_cast<int>(i);
                       }
                       block_end = static_cast<int>(i);
                     } else if (block_start != -1) {
-                      break;
+                      bool reenters = false;
+                      size_t look_further = std::min(path.path.poses.size(), i + 25);
+                      for (size_t k = i + 1; k < look_further; k++) {
+                        const auto& k_pt = path.path.poses[k].pose.position;
+                        double kd = std::hypot(k_pt.x - obs_x, k_pt.y - obs_y);
+                        if (kd <= clear_dist || isPointInPolygon(k_pt.x, k_pt.y, obs_poly.points)) {
+                          reenters = true;
+                          break;
+                        }
+                      }
+                      if (!reenters) {
+                        break;
+                      }
                     }
                   }
 
                   if (block_start != -1) {
-                    if (block_end + 3 < static_cast<int>(path.path.poses.size())) {
-                      currentMowingPathIndex = block_end + 3;
+                    size_t target_idx = block_end + 3;
+                    while (target_idx < path.path.poses.size()) {
+                      const auto& pt = path.path.poses[target_idx].pose.position;
+                      double d_to_obs = std::hypot(pt.x - obs_x, pt.y - obs_y);
+                      bool in_zone = (d_to_obs <= clear_dist) || isPointInPolygon(pt.x, pt.y, obs_poly.points);
+                      if (!in_zone) {
+                        for (const auto& existing : temporary_obstacles) {
+                          if (isPointInPolygon(pt.x, pt.y, existing.points)) {
+                            in_zone = true;
+                            break;
+                          }
+                        }
+                      }
+                      if (!in_zone) {
+                        break;
+                      }
+                      target_idx++;
+                    }
+
+                    if (target_idx < path.path.poses.size()) {
+                      currentMowingPathIndex = target_idx;
                       moveBaseGoal.target_pose = path.path.poses[currentMowingPathIndex];
                       ROS_INFO_STREAM(
                           "MowingBehavior: (FIRST POINT) Path target was blocked by obstacle. Advancing "
